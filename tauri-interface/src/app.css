@@ -1,11 +1,33 @@
 :root {
   background-color: #242424;
-
 }
+
+#map-container {
+  display: grid;
+  grid-template-columns: 1fr 3fr;
+  grid-gap: 10px;
+  width: 90%;
+  margin: 20px auto;
+  align-items: start; 
+}
+
+#control-panel {
+  background-color: lightgray;
+  padding: 10px;
+  border-radius: 10px;
+  height: 97%; 
+  display: flex;
+  flex-direction: column;
+  justify-content: start;
+}
+
+h2{
+  text-align: center;
+}
+
 #map {
   height: 700px;
-  width: 90%;
-  margin: 0 auto;
+  width: 100%;
   border-radius: 10px;
 }
 
@@ -36,7 +58,27 @@ h1 {
   color: lightgray;
 }
 
+button {
+  display: block;
+  margin: 10px 0;
+  padding: 10px 20px;
+  font-size: 16px;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+button:hover {
+  background-color: #0056b3;
+}
+
 @media (max-width: 1100px) {
+  #map-container {
+    grid-template-columns: 1fr;
+  }
+
   #graphs-container {
     grid-template-columns: 1fr;
   }
