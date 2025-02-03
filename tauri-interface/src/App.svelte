@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import L from "leaflet";
   import "leaflet/dist/leaflet.css";
   import Chart from "chart.js/auto";
@@ -10,71 +10,236 @@
   let showPoints = true;
   let selectedMetric = "default";
 
-  onMount(async () => {
-    const response = await fetch("/data.json");
-    const data = await response.json();
-    routeData = data;
+  let message = "Not Connected";
+  // $: statusMessage = message.trim() === "" ? "Not Connected" : message;
 
-    map = L.map("map").setView([data[0].gps.latitude, data[0].gps.longitude], 14);
+  let days = [];
+  let selectedDay = "";
+  let drives = [];
+  let selectedDrive = "";
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    }).addTo(map);
+  let chart1, chart2, chart3, chart4, chart5, chart6, chart7, chart8;
 
-    updateRouteLine();
-    updateMarkers();
+  async function checkConnection() {
+    try {
+      console.log("Fetching connection status...");
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 1000);
+      const response = await fetch("http://192.168.4.1/", { signal: controller.signal });
+      clearTimeout(timeout);
+      if (!response.ok) throw new Error("Network response was not ok");
+      const text = await response.text();
+      console.log("Response received:", text);
+      if (text.includes("Connected")) {
+        message = "Connected";
+        fetchDays();
+      } else {
+        message = "Not Connected";
+      }
+    } catch (error) {
+      console.error("Fetch error:", error);
+      message = "Not Connected";
+    }
+    await tick();
+  }
 
-    setTimeout(() => {
-      map.invalidateSize();
-    }, 100);
+  async function fetchDays() {
+    try {
+      console.log("Fetching available days...");
+      const response = await fetch("http://192.168.4.1/days");
+      if (!response.ok) throw new Error("Failed to fetch days");
+      days = await response.json();
+      selectedDay = days.length ? days[0] : "";
+      fetchDrives();
+    } catch (error) {
+      console.error("Fetch error:", error);
+      days = [];
+    }
+    await tick();
+  }
 
-    const timestamps = data.map((entry) => entry.gps.time);
-    const speeds = data.map((entry) => entry.obd.speed);
-    const rpms = data.map((entry) => entry.obd.rpm);
-    const instantMpg = data.map((entry) => entry.obd.instant_mpg);
-    const avgMpg = data.map((entry) => entry.obd.avg_mpg);
-    const throttlePositions = data.map((entry) => entry.obd.throttle);
-    const mafValues = data.map((entry) => entry.obd.maf);
-    const accelX = data.map((entry) => entry.imu.accel_x * 0.001 * 9.81);
-    const accelY = data.map((entry) => entry.imu.accel_y * 0.001 * 9.81);
+  async function fetchDrives() {
+    if (!selectedDay) return;
+    try {
+      console.log(`Fetching drives for ${selectedDay}...`);
+      const response = await fetch(`http://192.168.4.1/drives?day=${selectedDay}`);
+      if (!response.ok) throw new Error("Failed to fetch drives");
+      drives = await response.json();
+      selectedDrive = drives.length ? drives[0] : "";
+    } catch (error) {
+      console.error("Fetch error:", error);
+      drives = [];
+    }
+    await tick();
+  }
 
-    const createChart = (ctx, label, data, color, xLabel, yLabel) => {
-      new Chart(ctx, {
-        type: "line",
-        data: {
-          labels: timestamps,
-          datasets: [{ label, data, borderColor: color, fill: false }],
-        },
-        options: {
-          responsive: true,
-          plugins: { legend: { display: true } },
-          scales: {
-            x: { title: { display: true, text: xLabel }, ticks: { maxRotation: 45 } },
-            y: { title: { display: true, text: yLabel } },
-          },
+  async function loadDrive() {
+    if (!selectedDay || !selectedDrive) return;
+
+    try {
+      console.log(`Loading drive ${selectedDrive} for day ${selectedDay}...`);
+      const response = await fetch(`http://192.168.4.1/drive?day=${selectedDay}&drive=${selectedDrive}`);
+      if (!response.ok) throw new Error("Failed to load drive");
+
+      const text = await response.text();
+      console.log("Raw Response:", text);
+
+      let driveData;
+      try {
+        driveData = JSON.parse(text);
+        if (!Array.isArray(driveData)) {
+          throw new Error("Parsed JSON is not an array");
         }
-      });
-    };
+      } catch (error) {
+        console.log("Standard JSON parsing failed, attempting NDJSON parsing...");
+        driveData = text
+          .split("\n")
+          .filter((line) => line.trim() !== "")
+          .map((line) => JSON.parse(line));
+      }
+      
+      routeData = driveData;
+      await tick();
 
-    createChart(document.getElementById("chart1"), "Speed (kph)", speeds, "orange", "Time", "Speed (kph)");
-    createChart(document.getElementById("chart2"), "RPM", rpms, "red", "Time", "RPM");
-    createChart(document.getElementById("chart3"), "Instant MPG", instantMpg, "green", "Time", "MPG");
-    createChart(document.getElementById("chart4"), "Average MPG", avgMpg, "purple", "Time", "MPG");
-    createChart(document.getElementById("chart5"), "Throttle Position", throttlePositions, "brown", "Time", "Throttle (%)");
-    createChart(document.getElementById("chart6"), "Accel X", accelX, "magenta", "Time", "Acceleration (m/s²)");
-    createChart(document.getElementById("chart7"), "Accel Y", accelY, "darkblue", "Time", "Acceleration (m/s²)");
-    createChart(document.getElementById("chart8"), "MAF", mafValues, "cyan", "Time", "MAF (g/s)");
+      if (routeData.length > 0) {
+        map.setView([routeData[0].gps.latitude, routeData[0].gps.longitude], 14);
+      }
+
+      updateRouteLine();
+      updateMarkers();
+      updateCharts();
+    } catch (error) {
+      console.error("Fetch error:", error);
+    }
+  }
+
+  onMount(() => {
+    map = L.map("map").setView([0, 0], 2);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution:
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    }).addTo(map);
   });
+
+  const createChart = (ctx, label, data, color, xLabel, yLabel, labels) => {
+    return new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [{ label, data, borderColor: color, fill: false }],
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: true } },
+        scales: {
+          x: { title: { display: true, text: xLabel }, ticks: { maxRotation: 45 } },
+          y: { title: { display: true, text: yLabel } },
+        },
+      },
+    });
+  };
+
+  function updateCharts() {
+    const timestamps = routeData.map((entry) => entry.gps.time);
+    const speeds = routeData.map((entry) => entry.obd.speed);
+    const rpms = routeData.map((entry) => entry.obd.rpm);
+    const instantMpg = routeData.map((entry) => entry.obd.instant_mpg);
+    const avgMpg = routeData.map((entry) => entry.obd.avg_mpg);
+    const throttlePositions = routeData.map((entry) => entry.obd.throttle);
+    const mafValues = routeData.map((entry) => entry.obd.maf);
+    const accelX = routeData.map((entry) => entry.imu.accel_x * 0.001 * 9.81);
+    const accelY = routeData.map((entry) => entry.imu.accel_y * 0.001 * 9.81);
+
+    if (chart1) chart1.destroy();
+    if (chart2) chart2.destroy();
+    if (chart3) chart3.destroy();
+    if (chart4) chart4.destroy();
+    if (chart5) chart5.destroy();
+    if (chart6) chart6.destroy();
+    if (chart7) chart7.destroy();
+    if (chart8) chart8.destroy();
+
+    chart1 = createChart(
+      document.getElementById("chart1"),
+      "Speed (kph)",
+      speeds,
+      "orange",
+      "Time",
+      "Speed (kph)",
+      timestamps
+    );
+    chart2 = createChart(
+      document.getElementById("chart2"),
+      "RPM",
+      rpms,
+      "red",
+      "Time",
+      "RPM",
+      timestamps
+    );
+    chart3 = createChart(
+      document.getElementById("chart3"),
+      "Instant MPG",
+      instantMpg,
+      "green",
+      "Time",
+      "MPG",
+      timestamps
+    );
+    chart4 = createChart(
+      document.getElementById("chart4"),
+      "Average MPG",
+      avgMpg,
+      "purple",
+      "Time",
+      "MPG",
+      timestamps
+    );
+    chart5 = createChart(
+      document.getElementById("chart5"),
+      "Throttle Position",
+      throttlePositions,
+      "brown",
+      "Time",
+      "Throttle (%)",
+      timestamps
+    );
+    chart6 = createChart(
+      document.getElementById("chart6"),
+      "Accel X",
+      accelX,
+      "magenta",
+      "Time",
+      "Acceleration (m/s²)",
+      timestamps
+    );
+    chart7 = createChart(
+      document.getElementById("chart7"),
+      "Accel Y",
+      accelY,
+      "darkblue",
+      "Time",
+      "Acceleration (m/s²)",
+      timestamps
+    );
+    chart8 = createChart(
+      document.getElementById("chart8"),
+      "MAF",
+      mafValues,
+      "cyan",
+      "Time",
+      "MAF (g/s)",
+      timestamps
+    );
+  }
 
   function updateMarkers() {
     markers.forEach((marker) => map.removeLayer(marker));
     markers = [];
-
     if (showPoints) {
       routeData.forEach((point) => {
         const { latitude, longitude, time } = point.gps;
         const { speed, rpm, instant_mpg, throttle } = point.obd;
-
         const marker = L.marker([latitude, longitude])
           .addTo(map)
           .bindPopup(`
@@ -84,7 +249,6 @@
             <b>Instant MPG:</b> ${instant_mpg.toFixed(2)}<br>
             <b>Throttle:</b> ${throttle}%
           `);
-
         markers.push(marker);
       });
     }
@@ -99,20 +263,16 @@
 
     const route = routeData.map((point) => [point.gps.latitude, point.gps.longitude]);
     let metricValues;
-
     if (selectedMetric === "accel_x" || selectedMetric === "accel_y") {
       metricValues = routeData.map((point) => point.imu[selectedMetric] * 0.001 * 9.81);
     } else if (selectedMetric === "default") {
-      metricValues = routeData.map((point) => 1);
-    }
-    else {
+      metricValues = routeData.map(() => 1);
+    } else {
       metricValues = routeData.map((point) => point.obd[selectedMetric]);
     }
-
     const maxMetric = Math.max(...metricValues);
     const minMetric = Math.min(...metricValues);
     const range = maxMetric - minMetric || 1;
-
     for (let i = 0; i < route.length - 1; i++) {
       const start = route[i];
       const end = route[i + 1];
@@ -127,15 +287,54 @@
     showPoints = !showPoints;
     updateMarkers();
   }
+
+  checkConnection();
 </script>
 
 <main>
   <h1>Driving Analysis Interface</h1>
   <div id="map-container">
+
     <div id="control-panel">
-      <h2>Map Control</h2>
-      <label for="metric-select">Select Metric:</label>
-      <select id="metric-select" bind:value={selectedMetric} on:change={updateRouteLine}>
+
+      {#if message != "Connected"}
+      <div id="connection-status-container" style="background-color: #f8d7da; color: #721c24;">
+        Status: {message}
+        <button on:click={checkConnection}>Retry</button>
+      </div>
+    {:else}
+      <div id="connection-status-container" style="background-color: #d4edda; color: #155724;">
+        Status: Connected
+        <button on:click={checkConnection}>Retry</button>
+      </div>
+    {/if}
+    
+      <label for="processing-mode">Processing Mode:</label>
+      <select id="processing-mode" bind:value={selectedDay} on:change={fetchDrives}>
+        <option value="default">Post</option>
+        <option value="speed">Real-time</option>
+
+      </select>
+      
+      
+      <label for="day-select">Select Day:</label>
+      <select id="day-select" bind:value={selectedDay} on:change={fetchDrives}>
+        {#each days as day}
+          <option value={day}>{day}</option>
+        {/each}
+      </select>
+
+      <label for="drive-select">Select Drive:</label>
+      <select id="drive-select" bind:value={selectedDrive}>
+        {#each drives as drive}
+          <option value={drive}>{drive}</option>
+        {/each}
+      </select>
+
+      <button on:click={loadDrive}>Load Drive</button>
+
+      <label for="data-overlay">Route Data Overlay:</label>
+      <select name="data-overlay" bind:value={selectedMetric} on:change={updateRouteLine}>
         <option value="default">Default</option>
         <option value="speed">Speed</option>
         <option value="instant_mpg">Instant MPG</option>
@@ -150,6 +349,7 @@
     </div>
     <div id="map"></div>
   </div>
+
   <div id="graphs-container">
     <div class="chart"><canvas id="chart1"></canvas></div>
     <div class="chart"><canvas id="chart2"></canvas></div>
