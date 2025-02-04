@@ -21,10 +21,6 @@
   justify-content: start;
 }
 
-h2{
-  text-align: center;
-}
-
 #map {
   height: 700px;
   width: 100%;
@@ -41,17 +37,17 @@ h2{
 }
 
 .chart {
-  height: 400px;
+  height: 300px;
   max-width: 700px;
   overflow-x: auto;
   background-color: lightgray;
   border-radius: 10px;
 }
 
-canvas {
+/* canvas {
   width: 1000px;
   height: 100%;
-}
+} */
 
 h1 {
   text-align: center;
@@ -103,13 +99,58 @@ button:hover {
   margin: 10px 0;
 }
 
-select{
-  height: 100px;
-  width: 100%;
-  font-size: 16px;
-  border-radius: 5px;
+.div-container {
+  padding: 1rem;
+  border-radius: 12px;
+  border: 1px solid #ccc;
+  background-color: #f9f9f9;
+  display: flex;
+  flex-direction: column;
+}
+
+.radio-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+input[type="radio"] {
+  cursor: pointer;
 }
 label{
   font-size: 18px;
-  margin-top: 15px;
+  margin-top: 5px;
+}
+
+.dropdown {
+  width: 100%;
+  max-width: 300px; /* Adjust as needed */
+  padding: 5px; /* Increase padding for a bigger dropdown */
+  font-size: 1.1rem; 
+  border: 2px solid #ccc;
+  border-radius: 8px; /* Rounded corners */
+  background-color: #f9f9f9;
+  appearance: none; 
+  cursor: pointer;
+}
+
+/* Optional: Add a down arrow */
+.dropdown::after {
+  content: "▼";
+  font-size: 1.2rem;
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.live-data{
+  font-size: 1.2rem;
+  margin: 0 0 10px 0;
+}
+
+#live-data-container{
+  margin-top: 10px;
 }

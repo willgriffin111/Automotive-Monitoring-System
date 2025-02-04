@@ -11,7 +11,7 @@
   let selectedMetric = "default";
 
   let message = "Not Connected";
-  // $: statusMessage = message.trim() === "" ? "Not Connected" : message;
+  let processingMode = "post";
 
   let days = [];
   let selectedDay = "";
@@ -19,6 +19,18 @@
   let selectedDrive = "";
 
   let chart1, chart2, chart3, chart4, chart5, chart6, chart7, chart8;
+
+  // Variables to hold the live data values
+  let liveTime = "";
+  let liveSpeed = "";
+  let liveRPM = "";
+  let liveInstantMPG = "";
+  let liveThrottle = "";
+  let liveAccelX = "";
+  let liveAccelY = "";
+
+  // stores interval num for live updates
+  let liveDataInterval;
 
   async function checkConnection() {
     try {
@@ -29,7 +41,7 @@
       clearTimeout(timeout);
       if (!response.ok) throw new Error("Network response was not ok");
       const text = await response.text();
-      console.log("Response received:", text);
+
       if (text.includes("Connected")) {
         message = "Connected";
         fetchDays();
@@ -82,7 +94,6 @@
       if (!response.ok) throw new Error("Failed to load drive");
 
       const text = await response.text();
-      console.log("Raw Response:", text);
 
       let driveData;
       try {
@@ -113,6 +124,57 @@
     }
   }
 
+
+  async function fetchLiveData() {
+    try {
+      console.log("Fetching live data...");
+
+      const response = await fetch("http://192.168.4.1/live");
+      if (!response.ok) throw new Error("Failed to fetch live data");
+
+      const text = await response.text();
+      let liveData;
+      try {
+        liveData = JSON.parse(text);
+        if (!Array.isArray(liveData)) {
+          throw new Error("Parsed JSON is not an array");
+        }
+      } catch (error) {
+        console.log("Standard JSON parsing failed for live data, attempting NDJSON parsing...");
+        liveData = text
+          .split("\n")
+          .filter((line) => line.trim() !== "")
+          .map((line) => JSON.parse(line));
+      }
+      
+      // Replace the current route data with the live data
+      routeData = liveData;
+      await tick();
+
+      // Update the live display using the most recent entry
+      if (routeData.length > 0) {
+        const latest = routeData[routeData.length - 1];
+        liveTime = latest.gps.time;
+        liveSpeed = latest.obd.speed;
+        liveRPM = latest.obd.rpm;
+        liveInstantMPG = latest.obd.instant_mpg.toFixed(2);
+        liveThrottle = latest.obd.throttle;
+        liveAccelX = (latest.imu.accel_x * 0.001 * 9.81).toFixed(2);
+        liveAccelY = (latest.imu.accel_y * 0.001 * 9.81).toFixed(2);
+      }
+
+      // Update the map view with the first point
+      if (routeData.length > 0) {
+        map.setView([routeData[0].gps.latitude, routeData[0].gps.longitude], 14);
+      }
+      updateRouteLine();
+      updateMarkers();
+      updateCharts();
+    } catch (error) {
+      console.error("Error fetching live data:", error);
+    }
+  }
+
   onMount(() => {
     map = L.map("map").setView([0, 0], 2);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -120,6 +182,24 @@
         '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     }).addTo(map);
   });
+
+  // A reactive block to start (or stop) live data polling depending on processingMode.
+  // When in real-time mode = start an interval to call fetchLiveData every second.
+  $: {
+
+    if (processingMode === "real-time") {
+      if (!liveDataInterval) {
+        fetchLiveData(); 
+        liveDataInterval = setInterval(fetchLiveData, 1000)
+
+      }
+    } else {
+      if (liveDataInterval) {
+        clearInterval(liveDataInterval);
+        liveDataInterval = null;
+      }
+    }
+  }
 
   const createChart = (ctx, label, data, color, xLabel, yLabel, labels) => {
     return new Chart(ctx, {
@@ -129,6 +209,7 @@
         datasets: [{ label, data, borderColor: color, fill: false }],
       },
       options: {
+        animation: false,
         responsive: true,
         plugins: { legend: { display: true } },
         scales: {
@@ -159,78 +240,14 @@
     if (chart7) chart7.destroy();
     if (chart8) chart8.destroy();
 
-    chart1 = createChart(
-      document.getElementById("chart1"),
-      "Speed (kph)",
-      speeds,
-      "orange",
-      "Time",
-      "Speed (kph)",
-      timestamps
-    );
-    chart2 = createChart(
-      document.getElementById("chart2"),
-      "RPM",
-      rpms,
-      "red",
-      "Time",
-      "RPM",
-      timestamps
-    );
-    chart3 = createChart(
-      document.getElementById("chart3"),
-      "Instant MPG",
-      instantMpg,
-      "green",
-      "Time",
-      "MPG",
-      timestamps
-    );
-    chart4 = createChart(
-      document.getElementById("chart4"),
-      "Average MPG",
-      avgMpg,
-      "purple",
-      "Time",
-      "MPG",
-      timestamps
-    );
-    chart5 = createChart(
-      document.getElementById("chart5"),
-      "Throttle Position",
-      throttlePositions,
-      "brown",
-      "Time",
-      "Throttle (%)",
-      timestamps
-    );
-    chart6 = createChart(
-      document.getElementById("chart6"),
-      "Accel X",
-      accelX,
-      "magenta",
-      "Time",
-      "Acceleration (m/s²)",
-      timestamps
-    );
-    chart7 = createChart(
-      document.getElementById("chart7"),
-      "Accel Y",
-      accelY,
-      "darkblue",
-      "Time",
-      "Acceleration (m/s²)",
-      timestamps
-    );
-    chart8 = createChart(
-      document.getElementById("chart8"),
-      "MAF",
-      mafValues,
-      "cyan",
-      "Time",
-      "MAF (g/s)",
-      timestamps
-    );
+    chart1 = createChart(document.getElementById("chart1"), "Speed (kph)", speeds, "orange", "Time", "Speed (kph)", timestamps);
+    chart2 = createChart(document.getElementById("chart2"), "RPM", rpms, "red", "Time", "RPM", timestamps);
+    chart3 = createChart(document.getElementById("chart3"), "Instant MPG", instantMpg, "green", "Time", "MPG", timestamps);
+    chart4 = createChart(document.getElementById("chart4"), "Average MPG", avgMpg, "purple", "Time", "MPG", timestamps);
+    chart5 = createChart(document.getElementById("chart5"), "Throttle Position", throttlePositions, "brown", "Time", "Throttle (%)", timestamps);
+    chart6 = createChart(document.getElementById("chart6"), "Accel X", accelX, "magenta", "Time", "Acceleration (m/s²)", timestamps);
+    chart7 = createChart(document.getElementById("chart7"), "Accel Y", accelY, "darkblue", "Time", "Acceleration (m/s²)", timestamps);
+    chart8 = createChart(document.getElementById("chart8"), "MAF", mafValues, "cyan", "Time", "MAF (g/s)", timestamps);
   }
 
   function updateMarkers() {
@@ -255,6 +272,7 @@
   }
 
   function updateRouteLine() {
+
     map.eachLayer((layer) => {
       if (layer instanceof L.Polyline) {
         map.removeLayer(layer);
@@ -294,55 +312,87 @@
 <main>
   <h1>Driving Analysis Interface</h1>
   <div id="map-container">
-
     <div id="control-panel">
-
       {#if message != "Connected"}
-      <div id="connection-status-container" style="background-color: #f8d7da; color: #721c24;">
-        Status: {message}
-        <button on:click={checkConnection}>Retry</button>
-      </div>
-    {:else}
-      <div id="connection-status-container" style="background-color: #d4edda; color: #155724;">
-        Status: Connected
-        <button on:click={checkConnection}>Retry</button>
-      </div>
-    {/if}
+        <div id="connection-status-container" style="background-color: #f8d7da; color: #721c24;">
+          Status: {message}
+          <button on:click={checkConnection}>Retry</button>
+        </div>
+      {:else}
+        <div id="connection-status-container" style="background-color: #d4edda; color: #155724;">
+          Status: Connected
+          <button on:click={checkConnection}>Retry</button>
+        </div>
+      {/if}
     
       <label for="processing-mode">Processing Mode:</label>
-      <select id="processing-mode" bind:value={selectedDay} on:change={fetchDrives}>
-        <option value="default">Post</option>
-        <option value="speed">Real-time</option>
-
+      <select class="dropdown" bind:value={processingMode}>
+        <option value="post">Post</option>
+        <option value="real-time">Real-time</option>
       </select>
       
-      
-      <label for="day-select">Select Day:</label>
-      <select id="day-select" bind:value={selectedDay} on:change={fetchDrives}>
-        {#each days as day}
-          <option value={day}>{day}</option>
-        {/each}
-      </select>
+      {#if processingMode === "post"}
+        <label for="day-select">Select Day:</label>
+        <select class="dropdown" bind:value={selectedDay} on:change={fetchDrives}>
+          {#each days as day}
+            <option value={day}>{day}</option>
+          {/each}
+        </select>
 
-      <label for="drive-select">Select Drive:</label>
-      <select id="drive-select" bind:value={selectedDrive}>
-        {#each drives as drive}
-          <option value={drive}>{drive}</option>
-        {/each}
-      </select>
+        <label for="drive-select">Select Drive:</label>
+        <select class="dropdown" bind:value={selectedDrive}>
+          {#each drives as drive}
+            <option value={drive}>{drive}</option>
+          {/each}
+        </select>
 
-      <button on:click={loadDrive}>Load Drive</button>
+        <button on:click={loadDrive}>Load Drive</button>
 
-      <label for="data-overlay">Route Data Overlay:</label>
-      <select name="data-overlay" bind:value={selectedMetric} on:change={updateRouteLine}>
-        <option value="default">Default</option>
-        <option value="speed">Speed</option>
-        <option value="instant_mpg">Instant MPG</option>
-        <option value="throttle">Throttle Position</option>
-        <option value="accel_x">Accel X</option>
-        <option value="accel_y">Accel Y</option>
-        <option value="rpm">RPM</option>
-      </select>
+        <div class="div-container">
+          <label>Route Data Overlay:</label>
+          {#each [
+            { value: "default", label: "Default" },
+            { value: "speed", label: "Speed" },
+            { value: "instant_mpg", label: "Instant MPG" },
+            { value: "throttle", label: "Throttle Position" },
+            { value: "accel_x", label: "Accel X" },
+            { value: "accel_y", label: "Accel Y" },
+            { value: "rpm", label: "RPM" }
+          ] as option}
+            <label class="radio-option">
+              <input 
+                type="radio" 
+                name="data-overlay" 
+                bind:group={selectedMetric} 
+                value={option.value} 
+                on:change={updateRouteLine}
+              />
+              {option.label}
+            </label>
+          {/each}
+        </div>
+      {:else if processingMode === "real-time"}
+        <label for="data-overlay">Route Data Overlay:</label>
+        <select class="dropdown" name="data-overlay" bind:value={selectedMetric} on:change={updateRouteLine}>
+          <option value="default">Default</option>
+          <option value="speed">Speed</option>
+          <option value="instant_mpg">Instant MPG</option>
+          <option value="throttle">Throttle Position</option>
+          <option value="accel_x">Accel X</option>
+          <option value="accel_y">Accel Y</option>
+          <option value="rpm">RPM</option>
+        </select>
+
+        <div class="div-container" id="live-data-container">
+          <p class="live-data">Time: {liveTime}</p>
+          <p class="live-data">Speed: {liveSpeed}</p>
+          <p class="live-data">RPM: {liveRPM}</p>
+          <p class="live-data">Instant MPG: {liveInstantMPG}</p>
+          <p class="live-data">Throttle: {liveThrottle}</p>
+          <p class="live-data">Accel X: {liveAccelX}</p>
+          <p class="live-data">Accel Y: {liveAccelY}</p>
+        </div>
+      {/if}
       <button on:click={togglePoints}>
         {showPoints ? "Hide Points" : "Show Points"}
       </button>
@@ -350,6 +400,7 @@
     <div id="map"></div>
   </div>
 
+    {#if routeData.length !== 0}
   <div id="graphs-container">
     <div class="chart"><canvas id="chart1"></canvas></div>
     <div class="chart"><canvas id="chart2"></canvas></div>
@@ -360,4 +411,5 @@
     <div class="chart"><canvas id="chart7"></canvas></div>
     <div class="chart"><canvas id="chart8"></canvas></div>
   </div>
+  {/if}
 </main>
