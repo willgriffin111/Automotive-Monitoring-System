@@ -3,6 +3,7 @@
 #include <SPI.h>
 #include <SparkFun_u-blox_GNSS_Arduino_Library.h>
 #include "obd.hpp"
+#include "server.hpp"
 #include <SdFat.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
@@ -14,7 +15,6 @@
 // WiFi Access Point 
 const char* ssid = "MyESP32AP";
 const char* password = "12345678";
-WebServer server(80);
 
 char folderName[20]; 
 char fileName[40];  
@@ -33,156 +33,6 @@ unsigned long lastTime = 0;
 bool isCalibrated = false;  
 
 bool firstLog = true;
-
-void handleRoot() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  String message = "Connected";
-  server.send(200, "text/plain", message);
-}
-
-void handleDays() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  Serial.println("Listing available days (directories)...");
-  
-  // Open the root directory.
-  FsFile root = SD.open("/");
-  if (!root) {
-    Serial.println("Failed to open root directory");
-    server.send(500, "text/plain", "Failed to open root directory");
-    return;
-  }
-
-  String json = "[";
-  bool first = true;
-  
-  // Iterate over items in the root directory.
-  while (true) {
-    FsFile entry = root.openNextFile();
-    if (!entry) break;  // No more files/folders.
-    
-    if (entry.isDir()) {
-      char nameBuffer[32];
-      entry.getName(nameBuffer, sizeof(nameBuffer));
-      
-      // Skip hidden directories (names starting with a dot)
-      if (nameBuffer[0] == '.') {
-        entry.close();
-        continue;
-      }
-      
-      if (!first) {
-        json += ",";
-      }
-      json += "\"";
-      json += nameBuffer;
-      json += "\"";
-      first = false;
-    }
-    entry.close();
-  }
-  json += "]";
-  root.close();
-  
-  server.send(200, "application/json", json);
-}
-
-void handleDrives() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  if (!server.hasArg("day")) {
-    server.send(400, "text/plain", "Missing 'day' parameter");
-    return;
-  }
-  
-  String day = server.arg("day");
-  Serial.print("Listing drives for day: ");
-  Serial.println(day);
-  
-  // Build the full path to the day folder.
-  String path = "/" + day;
-  FsFile dayDir = SD.open(path.c_str());
-  if (!dayDir || !dayDir.isDir()) {
-    Serial.println("Day folder not found");
-    server.send(404, "text/plain", "Day folder not found");
-    return;
-  }
-  
-  String json = "[";
-  bool first = true;
-  
-  // Iterate over the files in the day folder.
-  while (true) {
-    FsFile entry = dayDir.openNextFile();
-    if (!entry) break;
-    
-    // Only include files (not subdirectories).
-    if (!entry.isDir()) {
-      char nameBuffer[32];
-      entry.getName(nameBuffer, sizeof(nameBuffer));
-      
-      // Skip hidden files (names starting with a dot)
-      if (nameBuffer[0] == '.') {
-        entry.close();
-        continue;
-      }
-      
-      if (!first) {
-        json += ",";
-      }
-      json += "\"";
-      json += nameBuffer;
-      json += "\"";
-      first = false;
-    }
-    entry.close();
-  }
-  json += "]";
-  dayDir.close();
-  
-  server.send(200, "application/json", json);
-}
-
-void handleDrive() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  if (!server.hasArg("day") || !server.hasArg("drive")) {
-    server.send(400, "text/plain", "Missing 'day' or 'drive' parameter");
-    return;
-  }
-  
-  String day = server.arg("day");
-  String driveFile = server.arg("drive");
-  
-  // Reject if the day or drive file starts with a dot
-  if (day.startsWith(".") || driveFile.startsWith(".")) {
-    server.send(403, "text/plain", "Access to hidden files is forbidden");
-    return;
-  }
-  
-  Serial.print("Fetching drive data for day: ");
-  Serial.print(day);
-  Serial.print(", drive file: ");
-  Serial.println(driveFile);
-  
-  // Build the full path to the drive file.
-  String path = "/" + day + "/" + driveFile;
-  FsFile file = SD.open(path.c_str(), O_READ);
-  if (!file) {
-    Serial.println("Drive file not found");
-    server.send(404, "text/plain", "Drive file not found");
-    return;
-  }
-  
-  // Read the file content.
-  String content;
-  while (file.available()) {
-    content += (char)file.read();
-  }
-  // Serial.println(content);
-
-  file.close();
-  
-  server.send(200, "application/json", content);
-}
-
 
 void calibrateGNNS() {
 
@@ -216,20 +66,9 @@ void setup() {
 
 
     Serial.println("Initialising System...");
-    Serial.println("Setting up WiFi Access Point...");
-    WiFi.softAP(ssid, password);
-    Serial.print("AP IP address: ");
-    Serial.println(WiFi.softAPIP());
-    
-    // Define API endpoints.
-    server.on("/", HTTP_GET, handleRoot);
-    server.on("/days", HTTP_GET, handleDays);
-    server.on("/drives", HTTP_GET, handleDrives);
-    server.on("/drive", HTTP_GET, handleDrive);
-    
-    // Start the web server.
-    server.begin();
-    Serial.println("Web server started.");
+
+     WiFi.softAP(ssid, password);
+    Serial.println("AP IP address: " + WiFi.softAPIP().toString());
     
     // SD Card Initialization
     Wire1.setPins(SDA1, SCL1);
@@ -242,6 +81,7 @@ void setup() {
         Serial.println("SD card initialized successfully.");
     }
     
+    setupServer();
     // Initialize GPS Module/IMU
 
     if (myGNSS.begin(Wire1)) {
