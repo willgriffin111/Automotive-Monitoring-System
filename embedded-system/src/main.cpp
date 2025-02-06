@@ -4,6 +4,7 @@
 #include <SparkFun_u-blox_GNSS_Arduino_Library.h>
 #include "obd.hpp"
 #include "server.hpp"
+
 #include <SdFat.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
@@ -11,39 +12,42 @@
 
 #define LOG_TO_SD true    
 #define SD_CS_PIN A0   
+#define DEBUG true
 
-// WiFi Access Point 
+// WiFi Access Point Credentials
 const char* ssid = "MyESP32AP";
 const char* password = "12345678";
 
+// Global variables for file/folder names
 char folderName[20]; 
 char fileName[40];  
 
-
+// Module instances
 OBD obd;
 SFE_UBLOX_GNSS myGNSS;  
 SdFat SD;
 FsFile logFile;
 
+SemaphoreHandle_t sdMutex;
 
+// Global variables for fuel efficiency calculations
 float totalSpeedTimeProduct = 0.0;
 float totalFuelTimeProduct = 0.0;
 unsigned long lastTime = 0;
 
 bool isCalibrated = false;  
-
 bool firstLog = true;
 
+//------------------------------------------------------
+// GNSS Calibration Function 
+//------------------------------------------------------
 void calibrateGNNS() {
-
     Serial.println("Starting GNSS Calibration...");
-
     while (!isCalibrated) {
         if (myGNSS.getEsfInfo()) {
             int fusionMode = myGNSS.packetUBXESFSTATUS->data.fusionMode;
             Serial.print(F("Fusion Mode: "));
             Serial.println(fusionMode);
-
             if (fusionMode == 1) {
                 Serial.println(F(" Calibrated!"));
                 isCalibrated = true;
@@ -53,37 +57,152 @@ void calibrateGNNS() {
         } else {
             Serial.println(F("Failed to retrieve ESF Info. Retrying..."));
         }
-        delay(1000); 
+        delay(1000);
     }
-
     Serial.println(F("Calibration Complete!"));
 }
 
 
+//------------------------------------------------------
+// Data Acquisition & SD Logging Task (runs on Core 1)
+//------------------------------------------------------
+void dataTask(void *pvParameters) {
+    (void) pvParameters; // Unused parameter
+
+    for (;;) {
+        unsigned long currentTime = millis();
+        float deltaTime = (currentTime - lastTime) / 1000.0; // Convert to seconds
+
+        bool journeyActive = false;
+        int rpm = 0, speed = 0, throttle = 0;
+        float maf = 0.0, mpg = 0.0, avgMPG = 0.0;
+        
+        // --- OBD-II Data Retrieval ---
+        obd.readRPM(rpm);
+        obd.readSpeed(speed);
+        obd.readMAF(maf);
+        obd.readThrottle(throttle);
+        
+        if (rpm > 0) journeyActive = true;
+
+        // --- Fuel Efficiency Calculation ---
+        if (speed > 0 && maf > 0) {
+            mpg = obd.calculateInstantMPG(speed, maf);
+            totalSpeedTimeProduct += (speed * 0.621371) * deltaTime; // Convert to MPH
+            totalFuelTimeProduct += (maf * 0.0805) * deltaTime;      // Fuel consumed over time
+            avgMPG = (totalFuelTimeProduct > 0) ? (totalSpeedTimeProduct / totalFuelTimeProduct) : 0.0;
+        }
+
+        // --- GPS Data Retrieval ---
+        byte SIV = myGNSS.getSIV();
+        double latitude = myGNSS.getLatitude() / 10000000.0;
+        double longitude = myGNSS.getLongitude() / 10000000.0;
+        uint8_t hour = myGNSS.getHour();
+        uint8_t minute = myGNSS.getMinute();
+        uint8_t second = myGNSS.getSecond();
+        uint16_t day = myGNSS.getDay();
+        uint16_t month = myGNSS.getMonth();
+        uint16_t year = myGNSS.getYear();
+
+        char timeStr[10];
+        sprintf(timeStr, "%02d:%02d:%02d", hour, minute, second);
+
+        char dateStr[12];
+        sprintf(dateStr, "%04d-%02d-%02d", year, month, day);
+
+        // --- IMU Data Retrieval ---
+        int accelX = 0, accelY = 0;
+        if (myGNSS.getEsfIns()) {
+            accelX = myGNSS.packetUBXESFINS->data.xAccel;
+            accelY = -myGNSS.packetUBXESFINS->data.yAccel;  // Invert Y-axis
+        }
+
+        // --- Debug Output ---
+        if (DEBUG) {
+            Serial.printf("\nRPM: %d, Speed (MPH): %.2f, MAF (g/sec): %.2f, Throttle (%%): %d",
+                          rpm, speed * 0.621371, maf, throttle);
+            Serial.printf("\nInstant MPG: %.2f, Avg MPG: %.2f", mpg, avgMPG);
+            Serial.printf("\nTime: %s, Date: %s, Lat: %.7f, Long: %.7f, SIV: %s",
+                          timeStr, dateStr, latitude, longitude, (SIV > 0) ? "Valid" : "Dead Reckoning");
+            Serial.printf("\nIMU Data: AccelX: %d, AccelY: %d\n", accelX, accelY);
+        }
+
+        // --- Logging Data to SD Card (Using Mutex) ---
+        if (LOG_TO_SD && journeyActive) {
+            if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000))) { // Protect SD access
+                if (firstLog) {
+                    sprintf(folderName, "%04d-%02d-%02d", year, month, day);
+                    if (!SD.exists(folderName)) SD.mkdir(folderName);
+                    sprintf(fileName, "%s/%02d-%02d-%02d.json", folderName, hour, minute, second);
+                    logFile = SD.open(fileName, O_RDWR | O_CREAT | O_AT_END);
+                    if (logFile) {
+                        Serial.printf("Log file created: %s\n", fileName);
+                        firstLog = false;
+                    } else {
+                        Serial.println("Failed to create log file.");
+                    }
+                }
+
+                if (logFile) {
+                    StaticJsonDocument<256> jsonDoc;
+                    jsonDoc["gps"]["time"] = timeStr;
+                    jsonDoc["gps"]["latitude"] = latitude;
+                    jsonDoc["gps"]["longitude"] = longitude;
+                    jsonDoc["obd"]["rpm"] = rpm;
+                    jsonDoc["obd"]["speed"] = speed;
+                    jsonDoc["obd"]["maf"] = maf;
+                    jsonDoc["obd"]["instant_mpg"] = mpg;
+                    jsonDoc["obd"]["throttle"] = throttle;
+                    jsonDoc["obd"]["avg_mpg"] = avgMPG;
+
+                    if (serializeJson(jsonDoc, logFile) == 0) {
+                        Serial.println("Failed to serialize JSON.");
+                    } else {
+                        logFile.println();
+                        Serial.println("\n Data logged.");
+                    }
+                    logFile.flush();
+                } else {
+                    Serial.println("Log file not open. Retrying...");
+                    logFile = SD.open(fileName, O_RDWR | O_CREAT | O_AT_END);
+                }
+                xSemaphoreGive(sdMutex); // Release SD Mutex
+            } else {
+                Serial.println("SD mutex timeout, skipping write...");
+            }
+        }
+
+        lastTime = currentTime;
+        vTaskDelay(pdMS_TO_TICKS(1000));  // Delay for 1 second (non-blocking)
+    }
+}
+
+
+//------------------------------------------------------
+// Setup: Initialisation & Task Creation
+//------------------------------------------------------
 void setup() {
     Serial.begin(115200);
     delay(1000);
-
-
     Serial.println("Initialising System...");
 
-     WiFi.softAP(ssid, password);
-    Serial.println("AP IP address: " + WiFi.softAPIP().toString());
-    
-    // SD Card Initialization
-    Wire1.setPins(SDA1, SCL1);
-    
-    Wire1.begin();
-
-    if (!SD.begin(SD_CS_PIN)) {
+    // --- SD Card Initialisation ---
+    if (!SD.begin(SD_CS_PIN, 1000000)) {
         Serial.println("SD card initialization failed!");
     } else {
         Serial.println("SD card initialized successfully.");
     }
-    
-    setupServer();
-    // Initialize GPS Module/IMU
 
+    // --- WiFi Access Point ---
+    WiFi.softAP(ssid, password);
+    Serial.println("AP IP address: " + WiFi.softAPIP().toString());
+
+    // --- Setup Web Server ---
+    setupServer();
+
+    // --- Initialize GPS Module/IMU ---
+        Wire1.setPins(SDA1, SCL1);
+    Wire1.begin();
     if (myGNSS.begin(Wire1)) {
         Serial.println("GPS Module Initialized");
         myGNSS.setI2COutput(COM_TYPE_UBX);
@@ -91,11 +210,12 @@ void setup() {
         Serial.println("Failed to initialize GPS Module");
     }
 
+
     // myGNSS.resetIMUalignment();
     // delay(1000);
     // calibrateGNNS();
 
-    // Initialize OBD-II Adapter
+    // --- Initialise OBD-II Adapter ---
     if (obd.initialize()) {
         Serial.println("OBD-II Adapter Initialized");
     } else {
@@ -103,130 +223,32 @@ void setup() {
     }
 
     lastTime = millis();
+
+    sdMutex = xSemaphoreCreateMutex();
+
+    if (sdMutex == NULL) {
+        Serial.println("Failed to create sdMutex!");
+    } else{
+        Serial.println("Mutex created successfully.");
+    }
+
+
+    // --- Create Data Acquisition Task on Core 1 ---
+    xTaskCreatePinnedToCore(
+        dataTask,     // Task function.
+        "Data Task",  // Name of task.
+        16384,         // Stack size.
+        NULL,         // Parameter passed to the task.
+        1,            // Task priority.
+        NULL,         // Task handle.
+        1             // Core where the task should run (Core 1).
+    );
 }
 
-
+//------------------------------------------------------
+// Main Loop: Handle the Web Server (runs on Core 0)
+//------------------------------------------------------
 void loop() {
     server.handleClient();
-
-    bool journyActive = false;
-    int rpm = 0, speed = 0, throttle = 0;
-    float maf = 0.0, mpg = 0.0;
-
-    unsigned long currentTime = millis();
-    float deltaTime = (currentTime - lastTime) / 1000.0; // Convert to seconds
-
-    // OBD-II Data Retrieval
-    if (obd.readRPM(rpm)) { Serial.print("\nRPM: "); Serial.print(rpm); }
-    if (rpm > 0) journyActive = true;
-    if (obd.readSpeed(speed)) { Serial.print(" Speed (MPH): "); Serial.print(speed * 0.621371); }
-    if (obd.readMAF(maf)) { Serial.print(" MAF (g/sec): "); Serial.print(maf);  }
-    if (obd.readThrottle(throttle)) { Serial.print(" Throttle (%): "); Serial.print(throttle); }
-
-    // Fuel Efficiency Calculation
-    mpg = obd.calculateInstantMPG(speed, maf);
-    totalSpeedTimeProduct += (speed * 0.621371) * deltaTime; // Speed in MPH over time
-    totalFuelTimeProduct += (maf * 0.0805) * deltaTime;      // Fuel consumed over time
-
-    float avgMPG = obd.calculateAverageMPG(totalSpeedTimeProduct, totalFuelTimeProduct);
-
-    Serial.print(" Instant MPG: "); Serial.print(mpg, 2); 
-    Serial.print(", Avg MPG: "); Serial.print(avgMPG, 2);
-
-    // GPS Data Retrieval
-    byte SIV = myGNSS.getSIV();
-    double latitude = myGNSS.getLatitude() / 10000000.0;
-    double longitude = myGNSS.getLongitude() / 10000000.0;
-    uint8_t hour = myGNSS.getHour();
-    uint8_t minute = myGNSS.getMinute();
-    uint8_t second = myGNSS.getSecond();
-    uint16_t day = myGNSS.getDay();
-    uint16_t month = myGNSS.getMonth();
-    uint16_t year = myGNSS.getYear();
-
-    char time[10];  
-    sprintf(time, "%02d:%02d:%02d", hour, minute, second);
-
-    char date[12];  
-    sprintf(date, "%04d-%02d-%02d", year, month, day);
-
-    if (SIV > 0 && myGNSS.getFixType() > 2) {
-        Serial.printf("\nTime: %s, Date: %s, Lat: %.7f, Long: %.7f, SIV: %d", time, date, latitude, longitude, SIV);
-    } else {
-        Serial.printf("\nTime: %s, Date: %s, Lat: %.7f, Long: %.7f, SIV: Dead Reckoning", time, date, latitude, longitude);
-    }
-
-    // IMU Data Retrieval
-    int accelX = 0, accelY = 0, accelZ = 0;
-    if (myGNSS.getEsfIns()) {
-        accelX = myGNSS.packetUBXESFINS->data.xAccel;
-        accelY = -myGNSS.packetUBXESFINS->data.yAccel;  // Invert Y-Axis for correct orientation
-        accelZ = myGNSS.packetUBXESFINS->data.zAccel;
-        Serial.printf("\nIMU Data: AccelX: %d, AccelY: %d, AccelZ: %d", accelX, accelY, accelZ);
-    } else {
-        Serial.println(F("Failed to retrieve IMU data."));
-    }
-
-    // Logging Data to SD Card
-    if (LOG_TO_SD && journyActive) {
-    if (firstLog) {
-        // Create folder and file names
-        sprintf(folderName, "%04d-%02d-%02d", myGNSS.getYear(), myGNSS.getMonth(), myGNSS.getDay());
-        if (!SD.exists(folderName)) SD.mkdir(folderName);
-
-        sprintf(fileName, "%s/%02d-%02d-%02d.json", folderName, myGNSS.getHour(), myGNSS.getMinute(), myGNSS.getSecond());
-        logFile = SD.open(fileName, O_RDWR | O_CREAT | O_AT_END);
-
-        if (logFile) {
-            Serial.print("Log file created: ");
-            Serial.println(fileName);
-            firstLog = false;
-        } else {
-            Serial.println("Failed to create or open log file.");
-            return; // Exit if file creation fails
-        }
-    }
-
-        if (logFile) {
-        StaticJsonDocument<1024> jsonDoc;
-        jsonDoc["gps"]["time"] = time;
-        jsonDoc["gps"]["latitude"] = latitude;
-        jsonDoc["gps"]["longitude"] = longitude;
-        // jsonDoc["gps"]["siv"] = SIV;
-        jsonDoc["obd"]["rpm"] = rpm;
-        jsonDoc["obd"]["speed"] = speed;
-        jsonDoc["obd"]["maf"] = maf;
-        jsonDoc["obd"]["instant_mpg"] = mpg;
-        jsonDoc["obd"]["throttle"] = throttle;
-        // jsonDoc["maf"] = maf;
-        jsonDoc["obd"]["avg_mpg"] = totalFuelTimeProduct > 0 ? totalSpeedTimeProduct / totalFuelTimeProduct : 0.0;
-        jsonDoc["imu"]["accel_x"] = accelX;
-        jsonDoc["imu"]["accel_y"] = accelY;
-        // jsonDoc["imu"]["accel_z"] = accelZ;
-
-        // Debug: Print JSON to Serial
-        // Serial.println("Logging JSON data:");
-        // serializeJsonPretty(jsonDoc, Serial);
-        // Serial.println();
-
-        // Write JSON to file
-        if (serializeJson(jsonDoc, logFile) == 0) {
-            Serial.println("Failed to serialize JSON to SD card.");
-        } else {
-            logFile.println(); // Add newline for readability
-            Serial.print("\nData logged to SD card.");
-        }
-
-        // Flush the file to ensure data is written
-        logFile.flush();
-    } else {
-        Serial.println("Log file is not open. Attempting to reopen...");
-        logFile = SD.open(fileName, O_RDWR | O_CREAT | O_AT_END);
-    }
-    
-    lastTime = currentTime;
-    Serial.println();
-    delay(1000); // 1-second delay
-    }
+    delay(10); 
 }
-
