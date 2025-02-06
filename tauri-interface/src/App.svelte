@@ -29,7 +29,7 @@
   let liveAccelX = "";
   let liveAccelY = "";
 
-  // stores interval num for live updates
+  // Stores the interval for live updates
   let liveDataInterval;
 
   async function checkConnection() {
@@ -39,7 +39,7 @@
       const timeout = setTimeout(() => controller.abort(), 1000);
       const response = await fetch("http://192.168.4.1/", { signal: controller.signal });
       clearTimeout(timeout);
-      if (!response.ok) throw new Error("Network response was not ok");
+      if (!response.ok) throw new Error("Network response error");
       const text = await response.text();
 
       if (text.includes("Connected")) {
@@ -94,15 +94,15 @@
       if (!response.ok) throw new Error("Failed to load drive");
 
       const text = await response.text();
-
       let driveData;
       try {
+        // STANDARD JSON PARSING
         driveData = JSON.parse(text);
         if (!Array.isArray(driveData)) {
           throw new Error("Parsed JSON is not an array");
         }
       } catch (error) {
-        console.log("Standard JSON parsing failed, attempting NDJSON parsing...");
+        // NDJSON PARSING
         driveData = text
           .split("\n")
           .filter((line) => line.trim() !== "")
@@ -123,58 +123,63 @@
       console.error("Fetch error:", error);
     }
   }
-
-
   async function fetchLiveData() {
     try {
-      console.log("Fetching live data...");
-
-      const response = await fetch("http://192.168.4.1/live");
-      if (!response.ok) throw new Error("Failed to fetch live data");
-
-      const text = await response.text();
-      let liveData;
-      try {
-        liveData = JSON.parse(text);
-        if (!Array.isArray(liveData)) {
-          throw new Error("Parsed JSON is not an array");
+        console.log("Fetching live data...");
+        const response = await fetch("http://192.168.4.1/live");
+        if (!response.ok) throw new Error("Failed to fetch live data");
+        const text = await response.text();
+        let liveData;
+        try {
+            liveData = JSON.parse(text);
+            if (!Array.isArray(liveData)) {
+                liveData = [liveData];
+            }
+        } catch (error) {
+            liveData = text.split("\n")
+                .filter((line) => line.trim() !== "")
+                .map((line) => JSON.parse(line));
         }
-      } catch (error) {
-        console.log("Standard JSON parsing failed for live data, attempting NDJSON parsing...");
-        liveData = text
-          .split("\n")
-          .filter((line) => line.trim() !== "")
-          .map((line) => JSON.parse(line));
-      }
-      
-      // Replace the current route data with the live data
-      routeData = liveData;
-      await tick();
 
-      // Update the live display using the most recent entry
-      if (routeData.length > 0) {
-        const latest = routeData[routeData.length - 1];
-        liveTime = latest.gps.time;
-        liveSpeed = latest.obd.speed;
-        liveRPM = latest.obd.rpm;
-        liveInstantMPG = latest.obd.instant_mpg.toFixed(2);
-        liveThrottle = latest.obd.throttle;
-        liveAccelX = (latest.imu.accel_x * 0.001 * 9.81).toFixed(2);
-        liveAccelY = (latest.imu.accel_y * 0.001 * 9.81).toFixed(2);
-      }
+        if (liveData.length > 0) {
+            // Append new data if it's actually new
+            if (
+                routeData.length === 0 ||
+                routeData[routeData.length - 1].gps.time !== liveData[0].gps.time
+            ) {
+                routeData = [...routeData, ...liveData];
 
-      // Update the map view with the first point
-      if (routeData.length > 0) {
-        map.setView([routeData[0].gps.latitude, routeData[0].gps.longitude], 14);
-      }
-      updateRouteLine();
-      updateMarkers();
-      updateCharts();
+                // Update map view to the latest point 
+                const latestPoint = liveData[liveData.length - 1].gps;
+                map.setView([latestPoint.latitude, latestPoint.longitude], 16, { animate: true });
+            } else {
+                console.log("Duplicate data; not appending.");
+            }
+        }
+
+        await tick();
+
+        if (routeData.length > 0) {
+            const latest = routeData[routeData.length - 1];
+            liveTime = latest.gps.time;
+            liveSpeed = latest.obd.speed;
+            liveRPM = latest.obd.rpm;
+            liveInstantMPG = latest.obd.instant_mpg.toFixed(2);
+            liveThrottle = latest.obd.throttle;
+            liveAccelX = (latest.imu.accel_x * 0.001 * 9.81).toFixed(2);
+            liveAccelY = (latest.imu.accel_y * 0.001 * 9.81).toFixed(2);
+        }
+
+        // Call update functions
+        updateRouteLine();
+        updateMarkers();
+        updateCharts();
     } catch (error) {
-      console.error("Error fetching live data:", error);
+        console.error("Error fetching live data:", error);
     }
-  }
+}
 
+  // Initialise the map
   onMount(() => {
     map = L.map("map").setView([0, 0], 2);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -183,24 +188,48 @@
     }).addTo(map);
   });
 
-  // A reactive block to start (or stop) live data polling depending on processingMode.
-  // When in real-time mode = start an interval to call fetchLiveData every second.
-  $: {
-
-    if (processingMode === "real-time") {
-      if (!liveDataInterval) {
-        fetchLiveData(); 
-        liveDataInterval = setInterval(fetchLiveData, 1000)
-
-      }
-    } else {
-      if (liveDataInterval) {
-        clearInterval(liveDataInterval);
-        liveDataInterval = null;
-      }
-    }
+  // Reactive block: update map and charts whenever routeData changes.
+  $: if (routeData.length) {
+    updateRouteLine();
+    updateMarkers();
+    updateCharts();
   }
 
+
+  // Initialise the map
+  onMount(() => {
+    map = L.map("map").setView([0, 0], 2);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution:
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    }).addTo(map);
+  });
+
+  // Reactive block to start/stop live polling depending on processingMode.
+  $: {
+  if (processingMode === "real-time") {
+    // Clear map when switching to real-time mode
+    routeData = [];
+    updateRouteLine();
+    updateMarkers();
+    
+    if (!liveDataInterval) {
+      checkConnection();
+      fetchLiveData(); // Initial fetch
+      liveDataInterval = setInterval(() => {
+        fetchLiveData();
+      }, 2000);
+    }
+  } else {
+    if (liveDataInterval) {
+      clearInterval(liveDataInterval);
+      liveDataInterval = null;
+    }
+  }
+}
+
+
+  // Chart creation 
   const createChart = (ctx, label, data, color, xLabel, yLabel, labels) => {
     return new Chart(ctx, {
       type: "line",
@@ -251,63 +280,78 @@
   }
 
   function updateMarkers() {
-    markers.forEach((marker) => map.removeLayer(marker));
-    markers = [];
-    if (showPoints) {
-      routeData.forEach((point) => {
-        const { latitude, longitude, time } = point.gps;
-        const { speed, rpm, instant_mpg, throttle } = point.obd;
-        const marker = L.marker([latitude, longitude])
-          .addTo(map)
-          .bindPopup(`
-            <b>Time:</b> ${time}<br>
-            <b>Speed:</b> ${speed} km/h<br>
-            <b>RPM:</b> ${rpm}<br>
-            <b>Instant MPG:</b> ${instant_mpg.toFixed(2)}<br>
-            <b>Throttle:</b> ${throttle}%
-          `);
-        markers.push(marker);
-      });
-    }
+  // Remove all existing markers first
+  markers.forEach((marker) => marker.remove());
+  markers = [];
+
+  if (showPoints) {
+    routeData.forEach((point) => {
+      const { latitude, longitude, time } = point.gps;
+      const { speed, rpm, instant_mpg, throttle } = point.obd;
+      
+      // Create a unique marker is created each time
+      const marker = L.marker([latitude, longitude]).addTo(map)
+        .bindPopup(`
+          <b>Time:</b> ${time}<br>
+          <b>Speed:</b> ${speed} km/h<br>
+          <b>RPM:</b> ${rpm}<br>
+          <b>Instant MPG:</b> ${instant_mpg.toFixed(2)}<br>
+          <b>Throttle:</b> ${throttle}%
+        `);
+
+      markers.push(marker);
+    });
   }
+}
+
 
   function updateRouteLine() {
-
-    map.eachLayer((layer) => {
-      if (layer instanceof L.Polyline) {
-        map.removeLayer(layer);
-      }
-    });
-
-    const route = routeData.map((point) => [point.gps.latitude, point.gps.longitude]);
-    let metricValues;
-    if (selectedMetric === "accel_x" || selectedMetric === "accel_y") {
-      metricValues = routeData.map((point) => point.imu[selectedMetric] * 0.001 * 9.81);
-    } else if (selectedMetric === "default") {
-      metricValues = routeData.map(() => 1);
-    } else {
-      metricValues = routeData.map((point) => point.obd[selectedMetric]);
+  // Remove old polylines before adding a new one
+  map.eachLayer((layer) => {
+    if (layer instanceof L.Polyline) {
+      map.removeLayer(layer);
     }
-    const maxMetric = Math.max(...metricValues);
-    const minMetric = Math.min(...metricValues);
-    const range = maxMetric - minMetric || 1;
-    for (let i = 0; i < route.length - 1; i++) {
-      const start = route[i];
-      const end = route[i + 1];
-      const normalizedValue = (metricValues[i] - minMetric) / range;
-      const color = `rgb(${255 * normalizedValue}, 0, ${255 * (1 - normalizedValue)})`;
-      const segment = L.polyline([start, end], { color, weight: 5 });
-      segment.addTo(map);
-    }
+  });
+
+  const route = routeData.map((point) => [point.gps.latitude, point.gps.longitude]);
+
+  if (route.length < 2) return; // Skip if no route data
+
+  let metricValues;
+  if (selectedMetric === "accel_x" || selectedMetric === "accel_y") {
+    metricValues = routeData.map((point) => point.imu[selectedMetric] * 0.001 * 9.81);
+  } else if (selectedMetric === "default") {
+    metricValues = routeData.map(() => 1);
+  } else {
+    metricValues = routeData.map((point) => point.obd[selectedMetric]);
   }
+
+  const maxMetric = Math.max(...metricValues);
+  const minMetric = Math.min(...metricValues);
+  const range = maxMetric - minMetric || 1;
+
+  for (let i = 0; i < route.length - 1; i++) {
+    const start = route[i];
+    const end = route[i + 1];
+    const normalizedValue = (metricValues[i] - minMetric) / range;
+    const color = `rgb(${255 * normalizedValue}, 0, ${255 * (1 - normalizedValue)})`;
+
+    // Add new route data to the map
+    L.polyline([start, end], { color, weight: 5 }).addTo(map);
+  }
+}
+
+
 
   function togglePoints() {
     showPoints = !showPoints;
     updateMarkers();
   }
 
+  // Initial connection check
   checkConnection();
 </script>
+
 
 <main>
   <h1>Driving Analysis Interface</h1>
@@ -396,11 +440,13 @@
       <button on:click={togglePoints}>
         {showPoints ? "Hide Points" : "Show Points"}
       </button>
+
+      <!-- <button on:click={loadDrive}>Load Drive</button> -->
     </div>
     <div id="map"></div>
   </div>
 
-    {#if routeData.length !== 0}
+    {#if routeData.length !== 0 && processingMode === "post"}
   <div id="graphs-container">
     <div class="chart"><canvas id="chart1"></canvas></div>
     <div class="chart"><canvas id="chart2"></canvas></div>
