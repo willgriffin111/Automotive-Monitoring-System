@@ -16,6 +16,8 @@ void setupServer() {
     server.on("/drives", HTTP_GET, handleDrives);
     server.on("/drive", HTTP_GET, handleDrive);
     server.on("/live", HTTP_GET, handleLiveData);
+    server.on("/sdinfo", HTTP_GET, handleSDInfo);
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);  // Increase signal strength
 
     server.begin();
     Serial.println("Web server started.");
@@ -263,3 +265,37 @@ void handleLiveData() {
     }
 }
 
+void handleSDInfo() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    Serial.println("Fetching SD diagnostics...");
+
+    if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        String json = "{";
+
+        // Retrieve volume information from the SD card.
+        FsVolume* vol = SD.vol();
+        if (!vol) {
+            json += "\"sd_status\": \"Not detected\"";
+        } else {
+            uint32_t sectorsPerCluster = vol->sectorsPerCluster();
+            uint32_t clusterCount      = vol->clusterCount();
+            uint32_t freeClusters      = vol->freeClusterCount();
+
+            uint64_t totalSize = (uint64_t)clusterCount * sectorsPerCluster * 512;  // in bytes
+            uint64_t freeSize  = (uint64_t)freeClusters * sectorsPerCluster * 512;   // in bytes
+            uint64_t usedSize  = totalSize - freeSize;
+
+            json += "\"sd_status\": \"OK\",";
+            json += "\"total_size\": " + String(totalSize / (1024.0 * 1024.0), 2) + ",";
+            json += "\"used_size\": "  + String(usedSize / (1024.0 * 1024.0), 2) + ",";
+            json += "\"free_size\": "  + String(freeSize / (1024.0 * 1024.0), 2) + ",";
+        }
+
+        json += "\"esp32_uptime_sec\": " + String(millis() / 1000) + "}";
+        server.send(200, "application/json", json);
+        xSemaphoreGive(sdMutex);
+    } else {
+        Serial.println("SD Mutex timeout in handleSDInfo()");
+        server.send(500, "text/plain", "SD card access timeout");
+    }
+}

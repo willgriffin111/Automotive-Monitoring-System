@@ -44,11 +44,6 @@
   border-radius: 10px;
 }
 
-/* canvas {
-  width: 1000px;
-  height: 100%;
-} */
-
 h1 {
   text-align: center;
   color: lightgray;
@@ -100,7 +95,7 @@ button:hover {
 }
 
 .div-container {
-  padding: 1rem;
+  padding: 15px;
   border-radius: 12px;
   border: 1px solid #ccc;
   background-color: #f9f9f9;
@@ -125,18 +120,17 @@ label{
 
 .dropdown {
   width: 100%;
-  max-width: 300px; /* Adjust as needed */
-  padding: 5px; /* Increase padding for a bigger dropdown */
+  max-width: 300px;
+  padding: 5px; 
   font-size: 1.1rem; 
   border: 2px solid #ccc;
-  border-radius: 8px; /* Rounded corners */
+  border-radius: 8px; 
   background-color: #f9f9f9;
   appearance: none; 
   cursor: pointer;
 }
 
-/* Optional: Add a down arrow */
-.dropdown::after {
+.dropdown::after { /* DOWN ARROW */
   content: "▼";
   font-size: 1.2rem;
   position: absolute;
@@ -153,4 +147,13 @@ label{
 
 #live-data-container{
   margin-top: 10px;
+}
+
+.sd-info-box {
+  background-color: #ffffff;
+  padding: 10px;
+  margin-top: 10px;
+  border-radius: 5px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+  font-size: 14px;
 }

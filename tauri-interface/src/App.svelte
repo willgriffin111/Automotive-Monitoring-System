@@ -17,6 +17,7 @@
   let selectedDay = "";
   let drives = [];
   let selectedDrive = "";
+  let speedMetric = "mph"
 
   let chart1, chart2, chart3, chart4, chart5, chart6, chart7, chart8;
 
@@ -28,6 +29,13 @@
   let liveThrottle = "";
   let liveAccelX = "";
   let liveAccelY = "";
+
+  let sdStatus = "Loading...";
+  let totalSize = "Loading...";
+  let usedSize = "Loading...";
+  let freeSize = "Loading...";
+  let upTime = "Loading..."
+
 
   // Stores the interval for live updates
   let liveDataInterval;
@@ -54,6 +62,36 @@
     }
     await tick();
   }
+
+  function handleProcessingModeChange() {
+    if (processingMode === "Settings") {
+      fetchDeviceInfo();
+    }
+  }
+
+  async function fetchDeviceInfo() {
+    try {
+
+        console.log("Fetching SD card info...");
+        const response = await fetch("http://192.168.4.1/sdinfo");
+        if (!response.ok) throw new Error("Failed to fetch SD info");
+
+        const data = await response.json();
+        sdStatus = data.sd_status;
+        totalSize = data.total_size.toFixed(2) + " MB";
+        usedSize = data.used_size.toFixed(2) + " MB";
+        freeSize = data.free_size.toFixed(2) + " MB";
+        upTime = data.esp32_uptime_sec + "Seconds";
+    } catch (error) {
+        console.error("Error fetching SD info:", error);
+        sdStatus = "Fail";
+        totalSize = "Fail";
+        usedSize = "Fail";
+        freeSize = "Fail";
+        upTime = "Fail";
+    }
+    await tick();
+}
 
   async function fetchDays() {
     try {
@@ -162,7 +200,8 @@
         if (routeData.length > 0) {
             const latest = routeData[routeData.length - 1];
             liveTime = latest.gps.time;
-            liveSpeed = latest.obd.speed;
+            if(speedMetric == "kph") liveSpeed = latest.obd.speed;
+            if(speedMetric == "mph") liveSpeed = (latest.obd.speed * 0.621371).toFixed(2);
             liveRPM = latest.obd.rpm;
             liveInstantMPG = latest.obd.instant_mpg.toFixed(2);
             liveThrottle = latest.obd.throttle;
@@ -251,7 +290,9 @@
 
   function updateCharts() {
     const timestamps = routeData.map((entry) => entry.gps.time);
-    const speeds = routeData.map((entry) => entry.obd.speed);
+    let speeds;
+    if(speedMetric == "kph") speeds = routeData.map((entry) => entry.obd.speed);
+    if(speedMetric == "mph") speeds = routeData.map((entry) => entry.obd.speed * 0.621371);
     const rpms = routeData.map((entry) => entry.obd.rpm);
     const instantMpg = routeData.map((entry) => entry.obd.instant_mpg);
     const avgMpg = routeData.map((entry) => entry.obd.avg_mpg);
@@ -269,7 +310,8 @@
     if (chart7) chart7.destroy();
     if (chart8) chart8.destroy();
 
-    chart1 = createChart(document.getElementById("chart1"), "Speed (kph)", speeds, "orange", "Time", "Speed (kph)", timestamps);
+    if(speedMetric == "kph") chart1 = createChart(document.getElementById("chart1"), "Speed (kph)", speeds, "orange", "Time", "Speed (kph)", timestamps);
+    if(speedMetric == "mph") chart1 = createChart(document.getElementById("chart1"), "Speed (mph)", speeds, "orange", "Time", "Speed (mph)", timestamps);
     chart2 = createChart(document.getElementById("chart2"), "RPM", rpms, "red", "Time", "RPM", timestamps);
     chart3 = createChart(document.getElementById("chart3"), "Instant MPG", instantMpg, "green", "Time", "MPG", timestamps);
     chart4 = createChart(document.getElementById("chart4"), "Average MPG", avgMpg, "purple", "Time", "MPG", timestamps);
@@ -291,14 +333,22 @@
       
       // Create a unique marker is created each time
       const marker = L.marker([latitude, longitude]).addTo(map)
-        .bindPopup(`
-          <b>Time:</b> ${time}<br>
-          <b>Speed:</b> ${speed} km/h<br>
-          <b>RPM:</b> ${rpm}<br>
-          <b>Instant MPG:</b> ${instant_mpg.toFixed(2)}<br>
-          <b>Throttle:</b> ${throttle}%
-        `);
-
+        if(speedMetric == "mph") marker.bindPopup(`
+            <b>Time:</b> ${time}<br>
+            <b>Speed:</b> ${(speed * 0.621371).toFixed(2)} mph<br>
+            <b>RPM:</b> ${rpm}<br>
+            <b>Instant MPG:</b> ${instant_mpg.toFixed(2)}<br>
+            <b>Throttle:</b> ${throttle}%
+          `);
+        else{
+          marker.bindPopup(`
+            <b>Time:</b> ${time}<br>
+            <b>Speed:</b> ${speed} km/h<br>
+            <b>RPM:</b> ${rpm}<br>
+            <b>Instant MPG:</b> ${instant_mpg.toFixed(2)}<br>
+            <b>Throttle:</b> ${throttle}%
+          `);
+      }
       markers.push(marker);
     });
   }
@@ -368,11 +418,12 @@
           <button on:click={checkConnection}>Retry</button>
         </div>
       {/if}
-    
-      <label for="processing-mode">Processing Mode:</label>
-      <select class="dropdown" bind:value={processingMode}>
+
+      <label for="processing-mode">Mode:</label>
+      <select class="dropdown" bind:value={processingMode} on:change={handleProcessingModeChange}>
         <option value="post">Post</option>
         <option value="real-time">Real-time</option>
+        <option value="Settings">Settings</option>
       </select>
       
       {#if processingMode === "post"}
@@ -393,28 +444,33 @@
         <button on:click={loadDrive}>Load Drive</button>
 
         <div class="div-container">
-          <label>Route Data Overlay:</label>
-          {#each [
-            { value: "default", label: "Default" },
-            { value: "speed", label: "Speed" },
-            { value: "instant_mpg", label: "Instant MPG" },
-            { value: "throttle", label: "Throttle Position" },
-            { value: "accel_x", label: "Accel X" },
-            { value: "accel_y", label: "Accel Y" },
-            { value: "rpm", label: "RPM" }
-          ] as option}
-            <label class="radio-option">
-              <input 
-                type="radio" 
-                name="data-overlay" 
-                bind:group={selectedMetric} 
-                value={option.value} 
-                on:change={updateRouteLine}
-              />
-              {option.label}
-            </label>
-          {/each}
+          <fieldset>
+            <legend>Route Data Overlay:</legend>
+            {#each [
+              { value: "default", label: "Default" },
+              { value: "speed", label: "Speed" },
+              { value: "instant_mpg", label: "Instant MPG" },
+              { value: "throttle", label: "Throttle Position" },
+              { value: "accel_x", label: "Accel X" },
+              { value: "accel_y", label: "Accel Y" },
+              { value: "rpm", label: "RPM" }
+            ] as option}
+              <label class="radio-option">
+                <input 
+                  type="radio" 
+                  name="data-overlay" 
+                  bind:group={selectedMetric} 
+                  value={option.value} 
+                  on:change={updateRouteLine}
+                />
+                {option.label}
+              </label>
+            {/each}
+          </fieldset>
         </div>
+        <button on:click={togglePoints}>
+        {showPoints ? "Hide Points" : "Show Points"}
+      </button>
       {:else if processingMode === "real-time"}
         <label for="data-overlay">Route Data Overlay:</label>
         <select class="dropdown" name="data-overlay" bind:value={selectedMetric} on:change={updateRouteLine}>
@@ -436,10 +492,28 @@
           <p class="live-data">Accel X: {liveAccelX}</p>
           <p class="live-data">Accel Y: {liveAccelY}</p>
         </div>
-      {/if}
-      <button on:click={togglePoints}>
+        <button on:click={togglePoints}>
         {showPoints ? "Hide Points" : "Show Points"}
       </button>
+      {:else if processingMode === "Settings"}
+      <label for="speed-metric">Speed metric: </label>
+      <select name="speed-metric" class="dropdown" bind:value={speedMetric}>
+        <option value="mph">MPH</option>
+        <option value="kph">KPH</option>
+      </select>
+      <label for="sdinfo">Sd card details: </label>
+      <div class="sd-info-box">
+        <p><b>SD Card Status:</b> {sdStatus}</p>
+        <p><b>Total Size:</b> {totalSize}</p>
+        <p><b>Used Size:</b> {usedSize}</p>
+        <p><b>Free Size:</b> {freeSize}</p>
+        <p><b>Up-time: </b> {upTime}</p>
+      </div>
+
+
+      
+      {/if}
+
 
       <!-- <button on:click={loadDrive}>Load Drive</button> -->
     </div>
