@@ -9,22 +9,25 @@
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <WebServer.h>
-
-#define LOG_TO_SD true    
+   
 #define SD_CS_PIN A0   
 #define DEBUG true
+
+// Definitions for the button and LED pins
+#define BUTTON_PIN A1      // Latching button input pin 
+#define LED_PIN    A2      // LED output pin
 
 // WiFi Access Point Credentials
 const char* ssid = "MyESP32AP";
 const char* password = "12345678";
 
 // Global variables for file/folder names
-char folderName[20]; 
-char fileName[40];  
+char folderName[20];
+char fileName[40];
 
 // Module instances
 OBD obd;
-SFE_UBLOX_GNSS myGNSS;  
+SFE_UBLOX_GNSS myGNSS;
 SdFat SD;
 FsFile logFile;
 
@@ -35,33 +38,35 @@ float totalSpeedTimeProduct = 0.0;
 float totalFuelTimeProduct = 0.0;
 unsigned long lastTime = 0;
 
-bool isCalibrated = false;  
+// Global flags (volatile because they are shared across tasks)
+volatile bool isCalibrated = false;
+volatile bool loggingActive = false;  // Reflects the state of the button (pressed = logging active)
 bool firstLog = true;
 
 //------------------------------------------------------
-// GNSS Calibration Function 
+// GNSS Calibration Function (Blocking)
 //------------------------------------------------------
 void calibrateGNNS() {
     Serial.println("Starting GNSS Calibration...");
+    // Loop until calibration is achieved.
     while (!isCalibrated) {
         if (myGNSS.getEsfInfo()) {
             int fusionMode = myGNSS.packetUBXESFSTATUS->data.fusionMode;
-            Serial.print(F("Fusion Mode: "));
+            Serial.print("Fusion Mode: ");
             Serial.println(fusionMode);
             if (fusionMode == 1) {
-                Serial.println(F(" Calibrated!"));
+                Serial.println("Calibrated!");
                 isCalibrated = true;
             } else {
-                Serial.println(F(" → Initialising... Perform calibration maneuvers."));
+                Serial.println("→ Initialising... Perform calibration maneuvers.");
             }
         } else {
-            Serial.println(F("Failed to retrieve ESF Info. Retrying..."));
+            Serial.println("Failed to retrieve ESF Info. Retrying...");
         }
         delay(1000);
     }
-    Serial.println(F("Calibration Complete!"));
+    Serial.println("Calibration Complete!");
 }
-
 
 //------------------------------------------------------
 // Data Acquisition & SD Logging Task (runs on Core 1)
@@ -69,9 +74,17 @@ void calibrateGNNS() {
 void dataTask(void *pvParameters) {
     (void) pvParameters; // Unused parameter
 
+    // Call calibration (blocking) if not already calibrated.
+    if (!isCalibrated) {
+        calibrateGNNS();
+        // Reset the timer after calibration.
+        lastTime = millis();
+    }
+    
+    // Now that calibration is complete, proceed with sensor reading and logging.
     for (;;) {
         unsigned long currentTime = millis();
-        float deltaTime = (currentTime - lastTime) / 1000.0; // Convert to seconds
+        float deltaTime = (currentTime - lastTime) / 1000.0; // seconds
 
         bool journeyActive = false;
         int rpm = 0, speed = 0, throttle = 0;
@@ -89,7 +102,7 @@ void dataTask(void *pvParameters) {
         if (speed > 0 && maf > 0) {
             mpg = obd.calculateInstantMPG(speed, maf);
             totalSpeedTimeProduct += (speed * 0.621371) * deltaTime; // Convert to MPH
-            totalFuelTimeProduct += (maf * 0.0805) * deltaTime;      // Fuel consumed over time
+            totalFuelTimeProduct += (maf * 0.0805) * deltaTime;      // Fuel consumption over time
             avgMPG = (totalFuelTimeProduct > 0) ? (totalSpeedTimeProduct / totalFuelTimeProduct) : 0.0;
         }
 
@@ -114,7 +127,7 @@ void dataTask(void *pvParameters) {
         int accelX = 0, accelY = 0;
         if (myGNSS.getEsfIns()) {
             accelX = myGNSS.packetUBXESFINS->data.xAccel;
-            accelY = -myGNSS.packetUBXESFINS->data.yAccel;  // Invert Y-axis
+            accelY = -myGNSS.packetUBXESFINS->data.yAccel;  // Invert Y-axis 
         }
 
         // --- Debug Output ---
@@ -128,12 +141,13 @@ void dataTask(void *pvParameters) {
         }
 
         // --- Logging Data to SD Card (Using Mutex) ---
-        if (LOG_TO_SD && journeyActive) {
+        // Log only if calibration is done, the button is pressed and a journey is active.
+        if (isCalibrated && loggingActive && journeyActive) {
             if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000))) { // Protect SD access
                 if (firstLog) {
                     sprintf(folderName, "%04d-%02d-%02d", year, month, day);
                     if (!SD.exists(folderName)) SD.mkdir(folderName);
-                    sprintf(fileName, "%s/%02d-%02d-%02d.json", folderName, hour, minute, second);
+                    sprintf(fileName, "%s/%02d-%02d.json", folderName, hour, minute);
                     logFile = SD.open(fileName, O_RDWR | O_CREAT | O_AT_END);
                     if (logFile) {
                         Serial.printf("Log file created: %s\n", fileName);
@@ -159,7 +173,7 @@ void dataTask(void *pvParameters) {
                         Serial.println("Failed to serialize JSON.");
                     } else {
                         logFile.println();
-                        Serial.println("\n Data logged.");
+                        Serial.println("\nData logged.");
                     }
                     logFile.flush();
                 } else {
@@ -173,20 +187,19 @@ void dataTask(void *pvParameters) {
         }
 
         lastTime = currentTime;
-        vTaskDelay(pdMS_TO_TICKS(1000));  // Delay for 1 second (non-blocking)
+        vTaskDelay(pdMS_TO_TICKS(1000));  // 1-second delay (non-blocking)
     }
 }
 
-
 //------------------------------------------------------
-// Setup: Initialisation & Task Creation
+// Setup: Initialization & Task Creation
 //------------------------------------------------------
 void setup() {
     Serial.begin(115200);
     delay(1000);
     Serial.println("Initialising System...");
 
-    // --- SD Card Initialisation ---
+    // --- SD Card Initialization ---
     if (!SD.begin(SD_CS_PIN, 1000000)) {
         Serial.println("SD card initialization failed!");
     } else {
@@ -200,8 +213,13 @@ void setup() {
     // --- Setup Web Server ---
     setupServer();
 
+    // --- Initialize LED and Button pins ---
+    pinMode(BUTTON_PIN, INPUT_PULLUP); // Button connects to ground when pressed
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, LOW); // Start with LED off
+
     // --- Initialize GPS Module/IMU ---
-        Wire1.setPins(SDA1, SCL1);
+    Wire1.setPins(SDA1, SCL1);
     Wire1.begin();
     if (myGNSS.begin(Wire1)) {
         Serial.println("GPS Module Initialized");
@@ -210,12 +228,7 @@ void setup() {
         Serial.println("Failed to initialize GPS Module");
     }
 
-
-    // myGNSS.resetIMUalignment();
-    // delay(1000);
-    // calibrateGNNS();
-
-    // --- Initialise OBD-II Adapter ---
+    // --- Initialize OBD-II Adapter ---
     if (obd.initialize()) {
         Serial.println("OBD-II Adapter Initialized");
     } else {
@@ -225,30 +238,64 @@ void setup() {
     lastTime = millis();
 
     sdMutex = xSemaphoreCreateMutex();
-
     if (sdMutex == NULL) {
         Serial.println("Failed to create sdMutex!");
-    } else{
+    } else {
         Serial.println("Mutex created successfully.");
     }
 
-
-    // --- Create Data Acquisition Task on Core 1 ---
+    // --- Create Data Task on Core 1 ---
     xTaskCreatePinnedToCore(
         dataTask,     // Task function.
         "Data Task",  // Name of task.
-        16384,         // Stack size.
-        NULL,         // Parameter passed to the task.
+        16384,        // Stack size.
+        NULL,         // Parameter.
         1,            // Task priority.
         NULL,         // Task handle.
-        1             // Core where the task should run (Core 1).
+        1             // Run on Core 1.
     );
 }
 
 //------------------------------------------------------
-// Main Loop: Handle the Web Server (runs on Core 0)
+// Main Loop: Handle Web Server, Button, and LED (runs on Core 0)
 //------------------------------------------------------
 void loop() {
     server.handleClient();
-    delay(10); 
+
+    if (!isCalibrated) {
+        // Before calibration is complete, blink the LED.
+        static unsigned long previousMillis = 0;
+        const unsigned long interval = 500; // milliseconds
+        unsigned long currentMillis = millis();
+        if (currentMillis - previousMillis >= interval) {
+            previousMillis = currentMillis;
+            digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // Toggle LED
+        }
+    } else {
+        // Once calibrated, the LED reflects the button state.
+        loggingActive = (digitalRead(BUTTON_PIN) == LOW);
+        digitalWrite(LED_PIN, loggingActive ? HIGH : LOW);
+    }
+
+    // Manages SD log file opening/closing when logging state changes.
+    static bool lastLoggingState = false;
+    if (loggingActive != lastLoggingState) {
+        if (loggingActive) {
+            // Logging just activated—prepare a new log file.
+            firstLog = true;
+            Serial.println("Logging activated.");
+        } else {
+            // Logging just deactivated—close the current log file if open.
+            if (logFile) {
+                if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000))) {
+                    logFile.close();
+                    xSemaphoreGive(sdMutex);
+                    Serial.println("Log file closed.");
+                }
+            }
+        }
+        lastLoggingState = loggingActive;
+    }
+
+    delay(10);  // Short delay 
 }
