@@ -13,9 +13,8 @@
 #define SD_CS_PIN A0   
 #define DEBUG true
 
-// Definitions for the button and LED pins
-#define BUTTON_PIN A1      // Latching button input pin 
-#define LED_PIN    A2      // LED output pin
+#define BUTTON_PIN A1      
+#define LED_PIN    A2      
 
 // WiFi Access Point Credentials
 const char* ssid = "MyESP32AP";
@@ -43,9 +42,7 @@ volatile bool isCalibrated = false;
 volatile bool loggingActive = false;  // Reflects the state of the button (pressed = logging active)
 bool firstLog = true;
 
-//------------------------------------------------------
 // GNSS Calibration Function (Blocking)
-//------------------------------------------------------
 void calibrateGNNS() {
     Serial.println("Starting GNSS Calibration...");
     // Loop until calibration is achieved.
@@ -68,9 +65,7 @@ void calibrateGNNS() {
     Serial.println("Calibration Complete!");
 }
 
-//------------------------------------------------------
 // Data Acquisition & SD Logging Task (runs on Core 1)
-//------------------------------------------------------
 void dataTask(void *pvParameters) {
     (void) pvParameters; // Unused parameter
 
@@ -81,7 +76,6 @@ void dataTask(void *pvParameters) {
         lastTime = millis();
     }
     
-    // Now that calibration is complete, proceed with sensor reading and logging.
     for (;;) {
         unsigned long currentTime = millis();
         float deltaTime = (currentTime - lastTime) / 1000.0; // seconds
@@ -191,9 +185,7 @@ void dataTask(void *pvParameters) {
     }
 }
 
-//------------------------------------------------------
 // Setup: Initialization & Task Creation
-//------------------------------------------------------
 void setup() {
     Serial.begin(115200);
     delay(1000);
@@ -214,7 +206,7 @@ void setup() {
     setupServer();
 
     // --- Initialize LED and Button pins ---
-    pinMode(BUTTON_PIN, INPUT_PULLUP); // Button connects to ground when pressed
+    pinMode(BUTTON_PIN, INPUT_PULLUP); 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW); // Start with LED off
 
@@ -256,20 +248,19 @@ void setup() {
     );
 }
 
-//------------------------------------------------------
+
 // Main Loop: Handle Web Server, Button, and LED (runs on Core 0)
-//------------------------------------------------------
 void loop() {
     server.handleClient();
 
     if (!isCalibrated) {
         // Before calibration is complete, blink the LED.
         static unsigned long previousMillis = 0;
-        const unsigned long interval = 500; // milliseconds
+        const unsigned long interval = 500; 
         unsigned long currentMillis = millis();
         if (currentMillis - previousMillis >= interval) {
             previousMillis = currentMillis;
-            digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // Toggle LED
+            digitalWrite(LED_PIN, !digitalRead(LED_PIN)); 
         }
     } else {
         // Once calibrated, the LED reflects the button state.
@@ -296,6 +287,7 @@ void loop() {
         }
         lastLoggingState = loggingActive;
     }
+
 
     delay(10);  // Short delay 
 }

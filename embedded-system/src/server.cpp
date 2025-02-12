@@ -7,21 +7,8 @@
 extern SdFat SD;  
 
 WebServer server(80);  
+bool deleteRecursively(const char* path);
 
-void setupServer() {
-    Serial.println("Setting up Web Server...");
-    
-    server.on("/", HTTP_GET, handleRoot);
-    server.on("/days", HTTP_GET, handleDays);
-    server.on("/drives", HTTP_GET, handleDrives);
-    server.on("/drive", HTTP_GET, handleDrive);
-    server.on("/live", HTTP_GET, handleLiveData);
-    server.on("/sdinfo", HTTP_GET, handleSDInfo);
-    WiFi.setTxPower(WIFI_POWER_19_5dBm);  // Increase signal strength
-
-    server.begin();
-    Serial.println("Web server started.");
-}
 
 
 void handleRoot() {
@@ -298,4 +285,121 @@ void handleSDInfo() {
         Serial.println("SD Mutex timeout in handleSDInfo()");
         server.send(500, "text/plain", "SD card access timeout");
     }
+}
+void handleDelete() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+
+    if (!server.hasArg("path")) {
+        server.send(400, "text/plain", "Missing 'path' parameter");
+        return;
+    }
+
+    String path = server.arg("path");
+
+    if (!path.startsWith("/")) {
+        server.send(400, "text/plain", "Invalid path: must start with '/'");
+        return;
+    }
+
+    if (path.indexOf("..") != -1) {
+        server.send(403, "text/plain", "Access forbidden");
+        return;
+    }
+
+    if (path.length() > 1 && path.charAt(1) == '.') {
+        server.send(403, "text/plain", "Access forbidden");
+        return;
+    }
+
+    Serial.printf("Deleting path: %s\n", path.c_str());
+
+    if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        bool success = deleteRecursively(path.c_str());
+        xSemaphoreGive(sdMutex);
+        if (success) {
+            server.send(200, "text/plain", "Deleted successfully");
+        } else {
+            server.send(500, "text/plain", "Failed to delete (path may not exist or an error occurred)");
+        }
+    } else {
+        Serial.println("SD Mutex timeout in handleDelete()");
+        server.send(500, "text/plain", "SD card access timeout");
+    }
+}
+
+bool deleteRecursively(const char* path) {
+    FsFile file = SD.open(path);
+    if (!file) {
+        Serial.printf("Path not found: %s\n", path);
+        return false;
+    }
+
+    if (file.isDir()) {
+        while (true) {
+            FsFile entry = file.openNextFile();
+            if (!entry) break;
+
+            char entryName[32];
+            entry.getName(entryName, sizeof(entryName));
+            if (strcmp(entryName, ".") == 0 || strcmp(entryName, "..") == 0) {
+                entry.close();
+                continue;
+            }
+
+            String fullPath = String(path) + "/" + String(entryName);
+            if (entry.isDir()) {
+                if (!deleteRecursively(fullPath.c_str())) {
+                    entry.close();
+                    file.close();
+                    return false;
+                }
+            } else {
+                if (!SD.remove(fullPath.c_str())) {
+                    Serial.printf("Failed to delete file: %s\n", fullPath.c_str());
+                    entry.close();
+                    file.close();
+                    return false;
+                }
+            }
+            entry.close();
+        }
+        file.close();
+        if (!SD.rmdir(path)) {
+            Serial.printf("Failed to remove directory: %s\n", path);
+            return false;
+        }
+        return true;
+    } else {
+        file.close();
+        if (!SD.remove(path)) {
+            Serial.printf("Failed to remove file: %s\n", path);
+            return false;
+        }
+        return true;
+    }
+}
+
+void handleDeleteOptions() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    server.send(200);
+}
+  
+
+void setupServer() {
+    Serial.println("Setting up Web Server...");
+    
+    server.on("/", HTTP_GET, handleRoot);
+    server.on("/days", HTTP_GET, handleDays);
+    server.on("/drives", HTTP_GET, handleDrives);
+    server.on("/drive", HTTP_GET, handleDrive);
+    server.on("/live", HTTP_GET, handleLiveData);
+    server.on("/sdinfo", HTTP_GET, handleSDInfo);
+    server.on("/delete", HTTP_OPTIONS, handleDeleteOptions);
+    server.on("/delete", HTTP_DELETE, handleDelete);
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);  // Increase signal strength
+
+    server.begin();
+    Serial.println("Web server started.");
 }

@@ -1,5 +1,6 @@
 :root {
   background-color: #242424;
+  font-family: Verdana;
 }
 
 #map-container {
@@ -59,7 +60,9 @@ button {
   border: none;
   border-radius: 5px;
   cursor: pointer;
+  width: 100%;
 }
+
 
 button:hover {
   background-color: #0056b3;
@@ -156,4 +159,12 @@ label{
   border-radius: 5px;
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
   font-size: 14px;
+}
+#delete-buttons-container{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-gap: 10px;
+}
+.delete-buttons{
+  font-size: 6px;
 }

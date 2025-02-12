@@ -17,11 +17,11 @@
   let selectedDay = "";
   let drives = [];
   let selectedDrive = "";
-  let speedMetric = "mph"
+  let speedMetric = "mph";
 
   let chart1, chart2, chart3, chart4, chart5, chart6, chart7, chart8;
 
-  // Variables to hold the live data values
+  // Variables for live data
   let liveTime = "";
   let liveSpeed = "";
   let liveRPM = "";
@@ -34,10 +34,9 @@
   let totalSize = "Loading...";
   let usedSize = "Loading...";
   let freeSize = "Loading...";
-  let upTime = "Loading..."
+  let upTime = "Loading...";
 
-
-  // Stores the interval for live updates
+  // Live data polling interval
   let liveDataInterval;
 
   async function checkConnection() {
@@ -71,27 +70,26 @@
 
   async function fetchDeviceInfo() {
     try {
+      console.log("Fetching SD card info...");
+      const response = await fetch("http://192.168.4.1/sdinfo");
+      if (!response.ok) throw new Error("Failed to fetch SD info");
 
-        console.log("Fetching SD card info...");
-        const response = await fetch("http://192.168.4.1/sdinfo");
-        if (!response.ok) throw new Error("Failed to fetch SD info");
-
-        const data = await response.json();
-        sdStatus = data.sd_status;
-        totalSize = data.total_size.toFixed(2) + " MB";
-        usedSize = data.used_size.toFixed(2) + " MB";
-        freeSize = data.free_size.toFixed(2) + " MB";
-        upTime = data.esp32_uptime_sec + "Seconds";
+      const data = await response.json();
+      sdStatus = data.sd_status;
+      totalSize = data.total_size.toFixed(2) + " MB";
+      usedSize = data.used_size.toFixed(2) + " MB";
+      freeSize = data.free_size.toFixed(2) + " MB";
+      upTime = data.esp32_uptime_sec + " Seconds";
     } catch (error) {
-        console.error("Error fetching SD info:", error);
-        sdStatus = "Fail";
-        totalSize = "Fail";
-        usedSize = "Fail";
-        freeSize = "Fail";
-        upTime = "Fail";
+      console.error("Error fetching SD info:", error);
+      sdStatus = "Fail";
+      totalSize = "Fail";
+      usedSize = "Fail";
+      freeSize = "Fail";
+      upTime = "Fail";
     }
     await tick();
-}
+  }
 
   async function fetchDays() {
     try {
@@ -104,6 +102,7 @@
     } catch (error) {
       console.error("Fetch error:", error);
       days = [];
+      selectedDay = "";
     }
     await tick();
   }
@@ -119,13 +118,13 @@
     } catch (error) {
       console.error("Fetch error:", error);
       drives = [];
+      selectedDrive = "";
     }
     await tick();
   }
 
   async function loadDrive() {
     if (!selectedDay || !selectedDrive) return;
-
     try {
       console.log(`Loading drive ${selectedDrive} for day ${selectedDay}...`);
       const response = await fetch(`http://192.168.4.1/drive?day=${selectedDay}&drive=${selectedDrive}`);
@@ -134,13 +133,13 @@
       const text = await response.text();
       let driveData;
       try {
-        // STANDARD JSON PARSING
+        // Try standard JSON parsing
         driveData = JSON.parse(text);
         if (!Array.isArray(driveData)) {
           throw new Error("Parsed JSON is not an array");
         }
       } catch (error) {
-        // NDJSON PARSING
+        // Otherwise, assume NDJSON format
         driveData = text
           .split("\n")
           .filter((line) => line.trim() !== "")
@@ -161,120 +160,142 @@
       console.error("Fetch error:", error);
     }
   }
+
   async function fetchLiveData() {
     try {
-        console.log("Fetching live data...");
-        const response = await fetch("http://192.168.4.1/live");
-        if (!response.ok) throw new Error("Failed to fetch live data");
-        const text = await response.text();
-        let liveData;
-        try {
-            liveData = JSON.parse(text);
-            if (!Array.isArray(liveData)) {
-                liveData = [liveData];
-            }
-        } catch (error) {
-            liveData = text.split("\n")
-                .filter((line) => line.trim() !== "")
-                .map((line) => JSON.parse(line));
+      console.log("Fetching live data...");
+      const response = await fetch("http://192.168.4.1/live");
+      if (!response.ok) throw new Error("Failed to fetch live data");
+      const text = await response.text();
+      let liveData;
+      try {
+        liveData = JSON.parse(text);
+        if (!Array.isArray(liveData)) {
+          liveData = [liveData];
         }
+      } catch (error) {
+        liveData = text.split("\n")
+          .filter((line) => line.trim() !== "")
+          .map((line) => JSON.parse(line));
+      }
 
-        if (liveData.length > 0) {
-            // Append new data if it's actually new
-            if (
-                routeData.length === 0 ||
-                routeData[routeData.length - 1].gps.time !== liveData[0].gps.time
-            ) {
-                routeData = [...routeData, ...liveData];
-
-                // Update map view to the latest point 
-                const latestPoint = liveData[liveData.length - 1].gps;
-                map.setView([latestPoint.latitude, latestPoint.longitude], 16, { animate: true });
-            } else {
-                console.log("Duplicate data; not appending.");
-            }
+      if (liveData.length > 0) {
+        // Append new data if it’s new
+        if (
+          routeData.length === 0 ||
+          routeData[routeData.length - 1].gps.time !== liveData[0].gps.time
+        ) {
+          routeData = [...routeData, ...liveData];
+          const latestPoint = liveData[liveData.length - 1].gps;
+          map.setView([latestPoint.latitude, latestPoint.longitude], 16, { animate: true });
+        } else {
+          console.log("Duplicate data; not appending.");
         }
+      }
 
-        await tick();
+      await tick();
 
-        if (routeData.length > 0) {
-            const latest = routeData[routeData.length - 1];
-            liveTime = latest.gps.time;
-            if(speedMetric == "kph") liveSpeed = latest.obd.speed;
-            if(speedMetric == "mph") liveSpeed = (latest.obd.speed * 0.621371).toFixed(2);
-            liveRPM = latest.obd.rpm;
-            liveInstantMPG = latest.obd.instant_mpg.toFixed(2);
-            liveThrottle = latest.obd.throttle;
-            liveAccelX = (latest.imu.accel_x * 0.001 * 9.81).toFixed(2);
-            liveAccelY = (latest.imu.accel_y * 0.001 * 9.81).toFixed(2);
-        }
+      if (routeData.length > 0) {
+        const latest = routeData[routeData.length - 1];
+        liveTime = latest.gps.time;
+        if (speedMetric == "kph") liveSpeed = latest.obd.speed;
+        if (speedMetric == "mph") liveSpeed = (latest.obd.speed * 0.621371).toFixed(2);
+        liveRPM = latest.obd.rpm;
+        liveInstantMPG = latest.obd.instant_mpg.toFixed(2);
+        liveThrottle = latest.obd.throttle;
+        liveAccelX = (latest.imu.accel_x * 0.001 * 9.81).toFixed(2);
+        liveAccelY = (latest.imu.accel_y * 0.001 * 9.81).toFixed(2);
+      }
 
-        // Call update functions
-        updateRouteLine();
-        updateMarkers();
-        updateCharts();
+      updateRouteLine();
+      updateMarkers();
+      updateCharts();
     } catch (error) {
-        console.error("Error fetching live data:", error);
+      console.error("Error fetching live data:", error);
     }
-}
+  }
 
-  // Initialise the map
+  // Delete the entire day folder (all drives for the selected day)
+  async function deleteDayFolder() {
+    if (!selectedDay) return;
+    try {
+      console.log(`Deleting day folder: /${selectedDay}`);
+      const response = await fetch(`http://192.168.4.1/delete?path=/${selectedDay}`, {
+        method: 'DELETE'
+      });
+      if (!response.ok) throw new Error("Failed to delete day folder");
+      console.log("All drives for the day have been deleted successfully.");
+      // Refresh days and drives after deletion.
+      await fetchDays();
+      await fetchDrives();
+    } catch (error) {
+      console.error("Error deleting day folder:", error);
+    }
+  }
+
+  // Delete only the selected drive file within the selected day folder.
+  async function deleteDriveFile() {
+    if (!selectedDrive) {
+      console.log("No drive selected for deletion.");
+      return;
+    }
+    try {
+      const path = `/${selectedDay}/${selectedDrive}`;
+      console.log(`Deleting drive file: ${path}`);
+      const response = await fetch(`http://192.168.4.1/delete?path=${encodeURIComponent(path)}`, {
+        method: 'DELETE'
+      });
+      if (!response.ok) throw new Error("Failed to delete drive file");
+      console.log("The drive file has been deleted successfully.");
+      await fetchDrives();
+    } catch (error) {
+      console.error("Error deleting drive file:", error);
+    }
+  }
+
+  // Initialise the map 
   onMount(() => {
     map = L.map("map").setView([0, 0], 2);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
     }).addTo(map);
   });
 
-  // Reactive block: update map and charts whenever routeData changes.
+  // Whenever routeData changes, update map overlays and charts.
   $: if (routeData.length) {
     updateRouteLine();
     updateMarkers();
     updateCharts();
   }
 
-
-  // Initialise the map
-  onMount(() => {
-    map = L.map("map").setView([0, 0], 2);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    }).addTo(map);
-  });
-
-  // Reactive block to start/stop live polling depending on processingMode.
+  // Manage live polling based on processing mode.
   $: {
-  if (processingMode === "real-time") {
-    // Clear map when switching to real-time mode
-    routeData = [];
-    updateRouteLine();
-    updateMarkers();
-    
-    if (!liveDataInterval) {
-      checkConnection();
-      fetchLiveData(); // Initial fetch
-      liveDataInterval = setInterval(() => {
+    if (processingMode === "real-time") {
+      routeData = [];
+      updateRouteLine();
+      updateMarkers();
+
+      if (!liveDataInterval) {
+        checkConnection();
         fetchLiveData();
-      }, 2000);
-    }
-  } else {
-    if (liveDataInterval) {
-      clearInterval(liveDataInterval);
-      liveDataInterval = null;
+        liveDataInterval = setInterval(fetchLiveData, 2000);
+      }
+    } else {
+      if (liveDataInterval) {
+        clearInterval(liveDataInterval);
+        liveDataInterval = null;
+      }
     }
   }
-}
 
-
-  // Chart creation 
+  // Chart creation helper.
   const createChart = (ctx, label, data, color, xLabel, yLabel, labels) => {
     return new Chart(ctx, {
       type: "line",
       data: {
-        labels: labels,
-        datasets: [{ label, data, borderColor: color, fill: false }],
+        labels,
+        datasets: [{ label, data, borderColor: color, fill: false }]
       },
       options: {
         animation: false,
@@ -282,17 +303,17 @@
         plugins: { legend: { display: true } },
         scales: {
           x: { title: { display: true, text: xLabel }, ticks: { maxRotation: 45 } },
-          y: { title: { display: true, text: yLabel } },
-        },
-      },
+          y: { title: { display: true, text: yLabel } }
+        }
+      }
     });
   };
 
   function updateCharts() {
     const timestamps = routeData.map((entry) => entry.gps.time);
-    let speeds;
-    if(speedMetric == "kph") speeds = routeData.map((entry) => entry.obd.speed);
-    if(speedMetric == "mph") speeds = routeData.map((entry) => entry.obd.speed * 0.621371);
+    let speeds = speedMetric == "kph"
+      ? routeData.map((entry) => entry.obd.speed)
+      : routeData.map((entry) => entry.obd.speed * 0.621371);
     const rpms = routeData.map((entry) => entry.obd.rpm);
     const instantMpg = routeData.map((entry) => entry.obd.instant_mpg);
     const avgMpg = routeData.map((entry) => entry.obd.avg_mpg);
@@ -310,8 +331,15 @@
     if (chart7) chart7.destroy();
     if (chart8) chart8.destroy();
 
-    if(speedMetric == "kph") chart1 = createChart(document.getElementById("chart1"), "Speed (kph)", speeds, "orange", "Time", "Speed (kph)", timestamps);
-    if(speedMetric == "mph") chart1 = createChart(document.getElementById("chart1"), "Speed (mph)", speeds, "orange", "Time", "Speed (mph)", timestamps);
+    chart1 = createChart(
+      document.getElementById("chart1"),
+      speedMetric == "kph" ? "Speed (kph)" : "Speed (mph)",
+      speeds,
+      "orange",
+      "Time",
+      speedMetric == "kph" ? "Speed (kph)" : "Speed (mph)",
+      timestamps
+    );
     chart2 = createChart(document.getElementById("chart2"), "RPM", rpms, "red", "Time", "RPM", timestamps);
     chart3 = createChart(document.getElementById("chart3"), "Instant MPG", instantMpg, "green", "Time", "MPG", timestamps);
     chart4 = createChart(document.getElementById("chart4"), "Average MPG", avgMpg, "purple", "Time", "MPG", timestamps);
@@ -322,25 +350,23 @@
   }
 
   function updateMarkers() {
-  // Remove all existing markers first
-  markers.forEach((marker) => marker.remove());
-  markers = [];
+    markers.forEach((marker) => marker.remove());
+    markers = [];
 
-  if (showPoints) {
-    routeData.forEach((point) => {
-      const { latitude, longitude, time } = point.gps;
-      const { speed, rpm, instant_mpg, throttle } = point.obd;
-      
-      // Create a unique marker is created each time
-      const marker = L.marker([latitude, longitude]).addTo(map)
-        if(speedMetric == "mph") marker.bindPopup(`
+    if (showPoints) {
+      routeData.forEach((point) => {
+        const { latitude, longitude, time } = point.gps;
+        const { speed, rpm, instant_mpg, throttle } = point.obd;
+        const marker = L.marker([latitude, longitude]).addTo(map);
+        if (speedMetric == "mph") {
+          marker.bindPopup(`
             <b>Time:</b> ${time}<br>
             <b>Speed:</b> ${(speed * 0.621371).toFixed(2)} mph<br>
             <b>RPM:</b> ${rpm}<br>
             <b>Instant MPG:</b> ${instant_mpg.toFixed(2)}<br>
             <b>Throttle:</b> ${throttle}%
           `);
-        else{
+        } else {
           marker.bindPopup(`
             <b>Time:</b> ${time}<br>
             <b>Speed:</b> ${speed} km/h<br>
@@ -348,60 +374,52 @@
             <b>Instant MPG:</b> ${instant_mpg.toFixed(2)}<br>
             <b>Throttle:</b> ${throttle}%
           `);
-      }
-      markers.push(marker);
-    });
+        }
+        markers.push(marker);
+      });
+    }
   }
-}
-
 
   function updateRouteLine() {
-  // Remove old polylines before adding a new one
-  map.eachLayer((layer) => {
-    if (layer instanceof L.Polyline) {
-      map.removeLayer(layer);
+    map.eachLayer((layer) => {
+      if (layer instanceof L.Polyline) {
+        map.removeLayer(layer);
+      }
+    });
+
+    const route = routeData.map((point) => [point.gps.latitude, point.gps.longitude]);
+    if (route.length < 2) return;
+
+    let metricValues;
+    if (selectedMetric === "accel_x" || selectedMetric === "accel_y") {
+      metricValues = routeData.map((point) => point.imu[selectedMetric] * 0.001 * 9.81);
+    } else if (selectedMetric === "default") {
+      metricValues = routeData.map(() => 1);
+    } else {
+      metricValues = routeData.map((point) => point.obd[selectedMetric]);
     }
-  });
 
-  const route = routeData.map((point) => [point.gps.latitude, point.gps.longitude]);
+    const maxMetric = Math.max(...metricValues);
+    const minMetric = Math.min(...metricValues);
+    const range = maxMetric - minMetric || 1;
 
-  if (route.length < 2) return; // Skip if no route data
-
-  let metricValues;
-  if (selectedMetric === "accel_x" || selectedMetric === "accel_y") {
-    metricValues = routeData.map((point) => point.imu[selectedMetric] * 0.001 * 9.81);
-  } else if (selectedMetric === "default") {
-    metricValues = routeData.map(() => 1);
-  } else {
-    metricValues = routeData.map((point) => point.obd[selectedMetric]);
+    for (let i = 0; i < route.length - 1; i++) {
+      const start = route[i];
+      const end = route[i + 1];
+      const normalizedValue = (metricValues[i] - minMetric) / range;
+      const color = `rgb(${255 * normalizedValue}, 0, ${255 * (1 - normalizedValue)})`;
+      L.polyline([start, end], { color, weight: 5 }).addTo(map);
+    }
   }
-
-  const maxMetric = Math.max(...metricValues);
-  const minMetric = Math.min(...metricValues);
-  const range = maxMetric - minMetric || 1;
-
-  for (let i = 0; i < route.length - 1; i++) {
-    const start = route[i];
-    const end = route[i + 1];
-    const normalizedValue = (metricValues[i] - minMetric) / range;
-    const color = `rgb(${255 * normalizedValue}, 0, ${255 * (1 - normalizedValue)})`;
-
-    // Add new route data to the map
-    L.polyline([start, end], { color, weight: 5 }).addTo(map);
-  }
-}
-
-
 
   function togglePoints() {
     showPoints = !showPoints;
     updateMarkers();
   }
 
-  // Initial connection check
+  // Initial connection check.
   checkConnection();
 </script>
-
 
 <main>
   <h1>Driving Analysis Interface</h1>
@@ -469,8 +487,8 @@
           </fieldset>
         </div>
         <button on:click={togglePoints}>
-        {showPoints ? "Hide Points" : "Show Points"}
-      </button>
+          {showPoints ? "Hide Points" : "Show Points"}
+        </button>
       {:else if processingMode === "real-time"}
         <label for="data-overlay">Route Data Overlay:</label>
         <select class="dropdown" name="data-overlay" bind:value={selectedMetric} on:change={updateRouteLine}>
@@ -493,43 +511,68 @@
           <p class="live-data">Accel Y: {liveAccelY}</p>
         </div>
         <button on:click={togglePoints}>
-        {showPoints ? "Hide Points" : "Show Points"}
-      </button>
+          {showPoints ? "Hide Points" : "Show Points"}
+        </button>
       {:else if processingMode === "Settings"}
-      <label for="speed-metric">Speed metric: </label>
-      <select name="speed-metric" class="dropdown" bind:value={speedMetric}>
-        <option value="mph">MPH</option>
-        <option value="kph">KPH</option>
-      </select>
-      <label for="sdinfo">Sd card details: </label>
-      <div class="sd-info-box">
-        <p><b>SD Card Status:</b> {sdStatus}</p>
-        <p><b>Total Size:</b> {totalSize}</p>
-        <p><b>Used Size:</b> {usedSize}</p>
-        <p><b>Free Size:</b> {freeSize}</p>
-        <p><b>Up-time: </b> {upTime}</p>
-      </div>
+        <label for="speed-metric">Speed metric: </label>
+        <select name="speed-metric" class="dropdown" bind:value={speedMetric}>
+          <option value="mph">MPH</option>
+          <option value="kph">KPH</option>
+        </select>
+        <label for="sdinfo">SD card details: </label>
+        <div class="sd-info-box">
+          <p><b>SD Card Status:</b> {sdStatus}</p>
+          <p><b>Total Size:</b> {totalSize}</p>
+          <p><b>Used Size:</b> {usedSize}</p>
+          <p><b>Free Size:</b> {freeSize}</p>
+          <p><b>Up-time:</b> {upTime}</p>
+        </div>
 
-
-      
+        <div class="delete-management">
+          <div>
+            <label for="delete-day-select">Select Day:</label>
+            <select id="delete-day-select" class="dropdown" bind:value={selectedDay} on:change={fetchDrives}>
+              {#each days as day}
+                <option value={day}>{day}</option>
+              {/each}
+            </select>
+          </div>
+          <div>
+            <label for="delete-drive-select">Select Drive:</label>
+            <select id="delete-drive-select" class="dropdown" bind:value={selectedDrive}>
+              {#each drives as drive}
+                <option value={drive}>{drive}</option>
+              {/each}
+            </select>
+          </div>
+          <div id="delete-buttons-container">
+            <button on:click={deleteDayFolder} class="delete-buttons">
+              Delete All Drives for {selectedDay}
+            </button>
+            <button on:click={deleteDriveFile} class="delete-buttons">
+              Delete Selected Drive on {selectedDrive}
+            </button>
+           
+          </div>
+          <button on:click={loadDrive}>Load Drive</button>
+        </div>
+        
       {/if}
-
-
-      <!-- <button on:click={loadDrive}>Load Drive</button> -->
     </div>
+
     <div id="map"></div>
   </div>
 
-    {#if routeData.length !== 0 && processingMode === "post"}
-  <div id="graphs-container">
-    <div class="chart"><canvas id="chart1"></canvas></div>
-    <div class="chart"><canvas id="chart2"></canvas></div>
-    <div class="chart"><canvas id="chart3"></canvas></div>
-    <div class="chart"><canvas id="chart4"></canvas></div>
-    <div class="chart"><canvas id="chart5"></canvas></div>
-    <div class="chart"><canvas id="chart6"></canvas></div>
-    <div class="chart"><canvas id="chart7"></canvas></div>
-    <div class="chart"><canvas id="chart8"></canvas></div>
-  </div>
+  {#if routeData.length !== 0 && processingMode === "post"}
+    <div id="graphs-container">
+      <div class="chart"><canvas id="chart1"></canvas></div>
+      <div class="chart"><canvas id="chart2"></canvas></div>
+      <div class="chart"><canvas id="chart3"></canvas></div>
+      <div class="chart"><canvas id="chart4"></canvas></div>
+      <div class="chart"><canvas id="chart5"></canvas></div>
+      <div class="chart"><canvas id="chart6"></canvas></div>
+      <div class="chart"><canvas id="chart7"></canvas></div>
+      <div class="chart"><canvas id="chart8"></canvas></div>
+    </div>
   {/if}
 </main>
