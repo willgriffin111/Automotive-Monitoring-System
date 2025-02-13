@@ -3,6 +3,7 @@
   import L from "leaflet";
   import "leaflet/dist/leaflet.css";
   import Chart from "chart.js/auto";
+  import { confirm } from '@tauri-apps/plugin-dialog';
 
   let map;
   let routeData = [];
@@ -64,7 +65,7 @@
 
   function handleProcessingModeChange() {
     if (processingMode === "Settings") {
-      fetchDeviceInfo();
+      // fetchDeviceInfo();
     }
   }
 
@@ -218,10 +219,17 @@
   // Delete the entire day folder (all drives for the selected day)
   async function deleteDayFolder() {
     if (!selectedDay) return;
+    // Tauri confirm popup
+    const userConfirmed = await confirm(
+      `Are you sure you want to delete all drives for ${selectedDay}?`,
+      { title: "Confirm Delete" }
+    );
+    if (!userConfirmed) return; // User cancelled
+
     try {
       console.log(`Deleting day folder: /${selectedDay}`);
       const response = await fetch(`http://192.168.4.1/delete?path=/${selectedDay}`, {
-        method: 'DELETE'
+        method: "DELETE"
       });
       if (!response.ok) throw new Error("Failed to delete day folder");
       console.log("All drives for the day have been deleted successfully.");
@@ -239,12 +247,20 @@
       console.log("No drive selected for deletion.");
       return;
     }
+    // Tauri confirm popup
+    const userConfirmed = await confirm(
+      `Are you sure you want to delete the drive file ${selectedDrive}?`,
+      { title: "Confirm Delete" }
+    );
+    if (!userConfirmed) return; // User cancelled
+
     try {
       const path = `/${selectedDay}/${selectedDrive}`;
       console.log(`Deleting drive file: ${path}`);
-      const response = await fetch(`http://192.168.4.1/delete?path=${encodeURIComponent(path)}`, {
-        method: 'DELETE'
-      });
+      const response = await fetch(
+        `http://192.168.4.1/delete?path=${encodeURIComponent(path)}`,
+        { method: "DELETE" }
+      );
       if (!response.ok) throw new Error("Failed to delete drive file");
       console.log("The drive file has been deleted successfully.");
       await fetchDrives();
@@ -261,6 +277,7 @@
         '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
     }).addTo(map);
   });
+
 
   // Whenever routeData changes, update map overlays and charts.
   $: if (routeData.length) {
@@ -468,7 +485,7 @@
               { value: "default", label: "Default" },
               { value: "speed", label: "Speed" },
               { value: "instant_mpg", label: "Instant MPG" },
-              { value: "throttle", label: "Throttle Position" },
+              { value: "throttle", label: "Throttle" },
               { value: "accel_x", label: "Accel X" },
               { value: "accel_y", label: "Accel Y" },
               { value: "rpm", label: "RPM" }
@@ -552,11 +569,9 @@
             <button on:click={deleteDriveFile} class="delete-buttons">
               Delete Selected Drive on {selectedDrive}
             </button>
-           
           </div>
           <button on:click={loadDrive}>Load Drive</button>
         </div>
-        
       {/if}
     </div>
 

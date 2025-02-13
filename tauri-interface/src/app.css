@@ -123,7 +123,7 @@ label{
 
 .dropdown {
   width: 100%;
-  max-width: 300px;
+  /* max-width: 300px; */
   padding: 5px; 
   font-size: 1.1rem; 
   border: 2px solid #ccc;
@@ -166,5 +166,7 @@ label{
   grid-gap: 10px;
 }
 .delete-buttons{
-  font-size: 6px;
+  font-size: 11px;
+  padding: 7px;
+  /* max-height: 40px; */
 }

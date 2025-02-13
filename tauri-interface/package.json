@@ -6,17 +6,24 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "setup": "npm init -y && npm install vite @sveltejs/vite-plugin-svelte svelte @tauri-apps/api @tauri-apps/cli @tauri-apps/plugin-dialog chart.js leaflet && npm set-script dev 'vite' && npm set-script build 'vite build' && npm set-script tauri 'tauri' && npm run tauri add dialog"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
-    "svelte": "^5.15.0",
+    "svelte": "^5.20.0",
     "vite": "^6.1.0"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.2.0",
     "@tauri-apps/cli": "^2.2.7",
+    "@tauri-apps/plugin-dialog": "^2.2.0",
     "chart.js": "^4.4.7",
     "leaflet": "^1.9.4"
-  }
+  },
+  "description": "Run to download dependences: ```bash npm  run setup ``` Open tauri app in dev mode: ```bash npm run tauri dev ```",
+  "main": "svelte.config.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
 }
