@@ -20,7 +20,10 @@
   let selectedDrive = "";
   let speedMetric = "mph";
 
+  // Chart instances
   let chart1, chart2, chart3, chart4, chart5, chart6, chart7, chart8;
+  // Canvas element references using bind:this
+  let chart1Canvas, chart2Canvas, chart3Canvas, chart4Canvas, chart5Canvas, chart6Canvas, chart7Canvas, chart8Canvas;
 
   // Variables for live data
   let liveTime = "";
@@ -65,7 +68,7 @@
 
   function handleProcessingModeChange() {
     if (processingMode === "Settings") {
-      // fetchDeviceInfo();
+      fetchDeviceInfo();
     }
   }
 
@@ -219,12 +222,11 @@
   // Delete the entire day folder (all drives for the selected day)
   async function deleteDayFolder() {
     if (!selectedDay) return;
-    // Tauri confirm popup
     const userConfirmed = await confirm(
       `Are you sure you want to delete all drives for ${selectedDay}?`,
       { title: "Confirm Delete" }
     );
-    if (!userConfirmed) return; // User cancelled
+    if (!userConfirmed) return;
 
     try {
       console.log(`Deleting day folder: /${selectedDay}`);
@@ -233,7 +235,6 @@
       });
       if (!response.ok) throw new Error("Failed to delete day folder");
       console.log("All drives for the day have been deleted successfully.");
-      // Refresh days and drives after deletion.
       await fetchDays();
       await fetchDrives();
     } catch (error) {
@@ -247,12 +248,11 @@
       console.log("No drive selected for deletion.");
       return;
     }
-    // Tauri confirm popup
     const userConfirmed = await confirm(
       `Are you sure you want to delete the drive file ${selectedDrive}?`,
       { title: "Confirm Delete" }
     );
-    if (!userConfirmed) return; // User cancelled
+    if (!userConfirmed) return;
 
     try {
       const path = `/${selectedDay}/${selectedDrive}`;
@@ -277,7 +277,6 @@
         '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
     }).addTo(map);
   });
-
 
   // Whenever routeData changes, update map overlays and charts.
   $: if (routeData.length) {
@@ -307,8 +306,8 @@
   }
 
   // Chart creation helper.
-  const createChart = (ctx, label, data, color, xLabel, yLabel, labels) => {
-    return new Chart(ctx, {
+  const createChart = (canvas, label, data, color, xLabel, yLabel, labels) => {
+    return new Chart(canvas, {
       type: "line",
       data: {
         labels,
@@ -326,7 +325,10 @@
     });
   };
 
-  function updateCharts() {
+  async function updateCharts() {
+    // Wait for DOM to update so that the canvases are available
+    await tick();
+
     const timestamps = routeData.map((entry) => entry.gps.time);
     let speeds = speedMetric == "kph"
       ? routeData.map((entry) => entry.obd.speed)
@@ -349,7 +351,7 @@
     if (chart8) chart8.destroy();
 
     chart1 = createChart(
-      document.getElementById("chart1"),
+      chart1Canvas,
       speedMetric == "kph" ? "Speed (kph)" : "Speed (mph)",
       speeds,
       "orange",
@@ -357,13 +359,13 @@
       speedMetric == "kph" ? "Speed (kph)" : "Speed (mph)",
       timestamps
     );
-    chart2 = createChart(document.getElementById("chart2"), "RPM", rpms, "red", "Time", "RPM", timestamps);
-    chart3 = createChart(document.getElementById("chart3"), "Instant MPG", instantMpg, "green", "Time", "MPG", timestamps);
-    chart4 = createChart(document.getElementById("chart4"), "Average MPG", avgMpg, "purple", "Time", "MPG", timestamps);
-    chart5 = createChart(document.getElementById("chart5"), "Throttle Position", throttlePositions, "brown", "Time", "Throttle (%)", timestamps);
-    chart6 = createChart(document.getElementById("chart6"), "Accel X", accelX, "magenta", "Time", "Acceleration (m/s²)", timestamps);
-    chart7 = createChart(document.getElementById("chart7"), "Accel Y", accelY, "darkblue", "Time", "Acceleration (m/s²)", timestamps);
-    chart8 = createChart(document.getElementById("chart8"), "MAF", mafValues, "cyan", "Time", "MAF (g/s)", timestamps);
+    chart2 = createChart(chart2Canvas, "RPM", rpms, "red", "Time", "RPM", timestamps);
+    chart3 = createChart(chart3Canvas, "Instant MPG", instantMpg, "green", "Time", "MPG", timestamps);
+    chart4 = createChart(chart4Canvas, "Average MPG", avgMpg, "purple", "Time", "MPG", timestamps);
+    chart5 = createChart(chart5Canvas, "Throttle Position", throttlePositions, "brown", "Time", "Throttle (%)", timestamps);
+    chart6 = createChart(chart6Canvas, "Accel X", accelX, "magenta", "Time", "Acceleration (m/s²)", timestamps);
+    chart7 = createChart(chart7Canvas, "Accel Y", accelY, "darkblue", "Time", "Acceleration (m/s²)", timestamps);
+    chart8 = createChart(chart8Canvas, "MAF", mafValues, "cyan", "Time", "MAF (g/s)", timestamps);
   }
 
   function updateMarkers() {
@@ -580,14 +582,14 @@
 
   {#if routeData.length !== 0 && processingMode === "post"}
     <div id="graphs-container">
-      <div class="chart"><canvas id="chart1"></canvas></div>
-      <div class="chart"><canvas id="chart2"></canvas></div>
-      <div class="chart"><canvas id="chart3"></canvas></div>
-      <div class="chart"><canvas id="chart4"></canvas></div>
-      <div class="chart"><canvas id="chart5"></canvas></div>
-      <div class="chart"><canvas id="chart6"></canvas></div>
-      <div class="chart"><canvas id="chart7"></canvas></div>
-      <div class="chart"><canvas id="chart8"></canvas></div>
+      <div class="chart"><canvas bind:this={chart1Canvas} id="chart1"></canvas></div>
+      <div class="chart"><canvas bind:this={chart2Canvas} id="chart2"></canvas></div>
+      <div class="chart"><canvas bind:this={chart3Canvas} id="chart3"></canvas></div>
+      <div class="chart"><canvas bind:this={chart4Canvas} id="chart4"></canvas></div>
+      <div class="chart"><canvas bind:this={chart5Canvas} id="chart5"></canvas></div>
+      <div class="chart"><canvas bind:this={chart6Canvas} id="chart6"></canvas></div>
+      <div class="chart"><canvas bind:this={chart7Canvas} id="chart7"></canvas></div>
+      <div class="chart"><canvas bind:this={chart8Canvas} id="chart8"></canvas></div>
     </div>
   {/if}
 </main>
