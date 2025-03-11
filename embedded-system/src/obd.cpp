@@ -5,7 +5,7 @@
 OBD::OBD() {}
 
 // Initialisation
-bool OBD::initialize() {
+bool OBD::initialise() {
     Serial1.begin(9600);  // Start communication on Serial1 at 9600 baud
     return init(PROTO_AUTO); // Use automatic protocol detection
 }
@@ -76,19 +76,12 @@ bool OBD::readMAF(float& maf) {
 bool OBD::readThrottle(int& throttle) {
     char response[64];
     if (sendPIDCommand("014A", response, sizeof(response))) {
-        // Serial.print("Raw Absolute Throttle Response: ");
-        // Serial.println(response); // Debug raw response
-
         char* throttlePtr = strstr(response, "41 4A");
         if (throttlePtr != nullptr && strlen(throttlePtr) >= 5) {
             char hexValue[3] = {throttlePtr[6], throttlePtr[7], '\0'}; 
             int hexThrottle = strtol(hexValue, NULL, 16); // Convert hex to integer
             throttle = (hexThrottle * 100) / 255; // Calculate percentage
 
-            // Serial.print("Parsed Hex Absolute Throttle: ");
-            // Serial.println(hexThrottle);
-            // Serial.print("Parsed Absolute Throttle (%): ");
-            // Serial.println(throttle);
             return true;
         }
     }

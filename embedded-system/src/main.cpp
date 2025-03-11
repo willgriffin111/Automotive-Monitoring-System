@@ -14,7 +14,8 @@
 #define DEBUG true
 
 #define BUTTON_PIN A1      
-#define LED_PIN    A2      
+#define LED_PIN    A2    
+
 
 // WiFi Access Point Credentials
 const char* ssid = "MyESP32AP";
@@ -42,6 +43,10 @@ volatile bool isCalibrated = false;
 volatile bool loggingActive = false;  // Reflects the state of the button (pressed = logging active)
 bool firstLog = true;
 
+// Flags to indicate if the modules have been initialized
+bool gnssInitialized = false;
+bool obdInitialized = false;
+
 // GNSS Calibration Function (Blocking)
 void calibrateGNNS() {
     Serial.println("Starting GNSS Calibration...");
@@ -55,7 +60,7 @@ void calibrateGNNS() {
                 Serial.println("Calibrated!");
                 isCalibrated = true;
             } else {
-                Serial.println("→ Initialising... Perform calibration maneuvers.");
+                Serial.println("Initialising... Perform calibration maneuvers.");
             }
         } else {
             Serial.println("Failed to retrieve ESF Info. Retrying...");
@@ -69,6 +74,11 @@ void calibrateGNNS() {
 void dataTask(void *pvParameters) {
     (void) pvParameters; // Unused parameter
 
+    // Wait until both GNSS and OBD modules have been initialized.
+    while (!gnssInitialized || !obdInitialized) {
+         vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
     // Call calibration (blocking) if not already calibrated.
     if (!isCalibrated) {
         calibrateGNNS();
@@ -80,7 +90,6 @@ void dataTask(void *pvParameters) {
         unsigned long currentTime = millis();
         float deltaTime = (currentTime - lastTime) / 1000.0; // seconds
 
-        bool journeyActive = false;
         int rpm = 0, speed = 0, throttle = 0;
         float maf = 0.0, mpg = 0.0, avgMPG = 0.0;
         
@@ -90,8 +99,6 @@ void dataTask(void *pvParameters) {
         obd.readMAF(maf);
         obd.readThrottle(throttle);
         
-        if (rpm > 0) journeyActive = true;
-
         // --- Fuel Efficiency Calculation ---
         if (speed > 0 && maf > 0) {
             mpg = obd.calculateInstantMPG(speed, maf);
@@ -136,7 +143,7 @@ void dataTask(void *pvParameters) {
 
         // --- Logging Data to SD Card (Using Mutex) ---
         // Log only if calibration is done, the button is pressed and a journey is active.
-        if (isCalibrated && loggingActive && journeyActive) {
+        if (loggingActive) {
             if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000))) { // Protect SD access
                 if (firstLog) {
                     sprintf(folderName, "%04d-%02d-%02d", year, month, day);
@@ -162,6 +169,8 @@ void dataTask(void *pvParameters) {
                     jsonDoc["obd"]["instant_mpg"] = mpg;
                     jsonDoc["obd"]["throttle"] = throttle;
                     jsonDoc["obd"]["avg_mpg"] = avgMPG;
+                    jsonDoc["imu"]["accel_x"] = accelX;
+                    jsonDoc["imu"]["accel_y"] = accelY;
 
                     if (serializeJson(jsonDoc, logFile) == 0) {
                         Serial.println("Failed to serialize JSON.");
@@ -210,23 +219,7 @@ void setup() {
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW); // Start with LED off
 
-    // --- Initialize GPS Module/IMU ---
-    Wire1.setPins(SDA1, SCL1);
-    Wire1.begin();
-    if (myGNSS.begin(Wire1)) {
-        Serial.println("GPS Module Initialized");
-        myGNSS.setI2COutput(COM_TYPE_UBX);
-    } else {
-        Serial.println("Failed to initialize GPS Module");
-    }
-
-    // --- Initialize OBD-II Adapter ---
-    if (obd.initialize()) {
-        Serial.println("OBD-II Adapter Initialized");
-    } else {
-        Serial.println("Failed to initialize OBD-II Adapter");
-    }
-
+    
     lastTime = millis();
 
     sdMutex = xSemaphoreCreateMutex();
@@ -248,10 +241,32 @@ void setup() {
     );
 }
 
-
 // Main Loop: Handle Web Server, Button, and LED (runs on Core 0)
 void loop() {
     server.handleClient();
+
+    // Check for button press to initialise modules (only once)
+    if (digitalRead(BUTTON_PIN) == LOW) {
+        if (!gnssInitialized) {
+            Wire1.setPins(SDA1, SCL1);
+            Wire1.begin();
+            if (myGNSS.begin(Wire1)) {
+                Serial.println("GPS Module Initialized");
+                myGNSS.setI2COutput(COM_TYPE_UBX);
+                gnssInitialized = true;
+            } else {
+                Serial.println("Failed to initialize NEO-M8U Module");
+            }
+        }
+        if (!obdInitialized) {
+            if (obd.initialise()) {
+                Serial.println("OBD-II Adapter Initialized");
+                obdInitialized = true;
+            } else {
+                Serial.println("Failed to initialise OBD-II Adapter");
+            }
+        }
+    }
 
     if (!isCalibrated) {
         // Before calibration is complete, blink the LED.
@@ -287,7 +302,5 @@ void loop() {
         }
         lastLoggingState = loggingActive;
     }
-
-
     delay(10);  // Short delay 
 }

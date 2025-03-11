@@ -9,8 +9,6 @@ extern SdFat SD;
 WebServer server(80);  
 bool deleteRecursively(const char* path);
 
-
-
 void handleRoot() {
     server.sendHeader("Access-Control-Allow-Origin", "*");
     server.send(200, "text/plain", "Connected");
@@ -171,7 +169,6 @@ void handleLiveData() {
             xSemaphoreGive(sdMutex);
             return;
         }
-
         String latestDay = "";
         while (true) {
             FsFile entry = root.openNextFile();
@@ -190,13 +187,11 @@ void handleLiveData() {
             entry.close();
         }
         root.close();
-
         if (latestDay == "") {
             server.send(404, "text/plain", "No log data found");
             xSemaphoreGive(sdMutex);
             return;
         }
-
         String path = "/" + latestDay;
         FsFile dayDir = SD.open(path.c_str());
         if (!dayDir || !dayDir.isDir()) {
@@ -204,7 +199,6 @@ void handleLiveData() {
             xSemaphoreGive(sdMutex);
             return;
         }
-
         String latestDrive = "";
         while (true) {
             FsFile entry = dayDir.openNextFile();
@@ -286,6 +280,7 @@ void handleSDInfo() {
         server.send(500, "text/plain", "SD card access timeout");
     }
 }
+
 void handleDelete() {
     server.sendHeader("Access-Control-Allow-Origin", "*");
 

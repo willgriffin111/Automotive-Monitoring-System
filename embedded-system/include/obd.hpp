@@ -4,8 +4,8 @@ class OBD : public COBD {
 public:
     OBD();
 
-    // Initialization
-    bool initialize();
+    // Initialisation
+    bool initialise();
 
     // Data Retrieval
     bool readRPM(int& rpm);
@@ -24,3 +24,4 @@ private:
 };
 
 
+extern OBD obd;  
