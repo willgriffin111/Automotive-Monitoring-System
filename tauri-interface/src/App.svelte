@@ -18,7 +18,8 @@
   let selectedDay = "";
   let drives = [];
   let selectedDrive = "";
-  let speedMetric = "mph";
+  
+
 
   // Chart instances
   let chart1, chart2, chart3, chart4, chart5, chart6, chart7, chart8;
@@ -30,9 +31,12 @@
   let liveSpeed = "";
   let liveRPM = "";
   let liveInstantMPG = "";
+  let liveAvgMPG = "";  
   let liveThrottle = "";
   let liveAccelX = "";
   let liveAccelY = "";
+
+  let speedMetric = "mph";
 
   let sdStatus = "Loading...";
   let totalSize = "Loading...";
@@ -135,20 +139,10 @@
       if (!response.ok) throw new Error("Failed to load drive");
 
       const text = await response.text();
-      let driveData;
-      try {
-        // Try standard JSON parsing
-        driveData = JSON.parse(text);
-        if (!Array.isArray(driveData)) {
-          throw new Error("Parsed JSON is not an array");
-        }
-      } catch (error) {
-        // Otherwise, assume NDJSON format
-        driveData = text
+      const driveData = text
           .split("\n")
-          .filter((line) => line.trim() !== "")
-          .map((line) => JSON.parse(line));
-      }
+          .filter(line => line.trim() !== "")
+          .map(line => JSON.parse(line));
       
       routeData = driveData;
       await tick();
@@ -171,17 +165,10 @@
       const response = await fetch("http://192.168.4.1/live");
       if (!response.ok) throw new Error("Failed to fetch live data");
       const text = await response.text();
-      let liveData;
-      try {
-        liveData = JSON.parse(text);
-        if (!Array.isArray(liveData)) {
-          liveData = [liveData];
-        }
-      } catch (error) {
-        liveData = text.split("\n")
-          .filter((line) => line.trim() !== "")
-          .map((line) => JSON.parse(line));
-      }
+      const liveData = text
+          .split("\n")
+          .filter(line => line.trim() !== "")
+          .map(line => JSON.parse(line));
 
       if (liveData.length > 0) {
         // Append new data if it’s new
@@ -193,7 +180,7 @@
           const latestPoint = liveData[liveData.length - 1].gps;
           map.setView([latestPoint.latitude, latestPoint.longitude], 16, { animate: true });
         } else {
-          console.log("Duplicate data; not appending.");
+          console.log("Duplicate data");
         }
       }
 
@@ -206,6 +193,7 @@
         if (speedMetric == "mph") liveSpeed = (latest.obd.speed * 0.621371).toFixed(2);
         liveRPM = latest.obd.rpm;
         liveInstantMPG = latest.obd.instant_mpg.toFixed(2);
+        liveAvgMPG = latest.obd.avg_mpg.toFixed(2);  
         liveThrottle = latest.obd.throttle;
         liveAccelX = (latest.imu.accel_x * 0.001 * 9.81).toFixed(2);
         liveAccelY = (latest.imu.accel_y * 0.001 * 9.81).toFixed(2);
@@ -330,9 +318,12 @@
     await tick();
 
     const timestamps = routeData.map((entry) => entry.gps.time);
-    let speeds = speedMetric == "kph"
-      ? routeData.map((entry) => entry.obd.speed)
-      : routeData.map((entry) => entry.obd.speed * 0.621371);
+    let speeds;
+    if (speedMetric == "kph") {
+      speeds = routeData.map((entry) => entry.obd.speed);
+    } else {
+      speeds = routeData.map((entry) => entry.obd.speed * 0.621371);
+    }
     const rpms = routeData.map((entry) => entry.obd.rpm);
     const instantMpg = routeData.map((entry) => entry.obd.instant_mpg);
     const avgMpg = routeData.map((entry) => entry.obd.avg_mpg);
@@ -350,15 +341,11 @@
     if (chart7) chart7.destroy();
     if (chart8) chart8.destroy();
 
-    chart1 = createChart(
-      chart1Canvas,
-      speedMetric == "kph" ? "Speed (kph)" : "Speed (mph)",
-      speeds,
-      "orange",
-      "Time",
-      speedMetric == "kph" ? "Speed (kph)" : "Speed (mph)",
-      timestamps
-    );
+    if (speedMetric == "kph") {
+      chart1 = createChart(chart1Canvas, "Speed (kph)", speeds, "orange", "Time", "Speed (kph)", timestamps);
+    } else {
+      chart1 = createChart(chart1Canvas, "Speed (mph)", speeds, "orange", "Time", "Speed (mph)", timestamps);
+    }
     chart2 = createChart(chart2Canvas, "RPM", rpms, "red", "Time", "RPM", timestamps);
     chart3 = createChart(chart3Canvas, "Instant MPG", instantMpg, "green", "Time", "MPG", timestamps);
     chart4 = createChart(chart4Canvas, "Average MPG", avgMpg, "purple", "Time", "MPG", timestamps);
@@ -375,23 +362,29 @@
     if (showPoints) {
       routeData.forEach((point) => {
         const { latitude, longitude, time } = point.gps;
-        const { speed, rpm, instant_mpg, throttle } = point.obd;
+        const { speed, rpm, instant_mpg, throttle, avg_mpg } = point.obd;
         const marker = L.marker([latitude, longitude]).addTo(map);
         if (speedMetric == "mph") {
-          marker.bindPopup(`
+            marker.bindPopup(`
             <b>Time:</b> ${time}<br>
             <b>Speed:</b> ${(speed * 0.621371).toFixed(2)} mph<br>
             <b>RPM:</b> ${rpm}<br>
             <b>Instant MPG:</b> ${instant_mpg.toFixed(2)}<br>
-            <b>Throttle:</b> ${throttle}%
-          `);
+            <b>Average MPG:</b> ${avg_mpg.toFixed(2)}<br>
+            <b>Throttle:</b> ${throttle}%<br>
+            <b>Cornerning:</b> ${(point.imu.accel_y * 0.001 * 9.81).toFixed(2)} m/s²<br>
+            <b>Acceleration:</b> ${(point.imu.accel_x * 0.001 * 9.81).toFixed(2)} m/s²
+            `);
         } else {
           marker.bindPopup(`
             <b>Time:</b> ${time}<br>
             <b>Speed:</b> ${speed} km/h<br>
             <b>RPM:</b> ${rpm}<br>
             <b>Instant MPG:</b> ${instant_mpg.toFixed(2)}<br>
+            <b>Average MPG:</b> ${avg_mpg.toFixed(2)}<br>
             <b>Throttle:</b> ${throttle}%
+            <b>Cornerning:</b> ${(point.imu.accel_y * 0.001 * 9.81).toFixed(2)} m/s²<br>
+            <b>Acceleration:</b> ${(point.imu.accel_x * 0.001 * 9.81).toFixed(2)} m/s²
           `);
         }
         markers.push(marker);
@@ -487,9 +480,10 @@
               { value: "default", label: "Default" },
               { value: "speed", label: "Speed" },
               { value: "instant_mpg", label: "Instant MPG" },
+              { value: "avg_mpg", label: "Average MPG" },
               { value: "throttle", label: "Throttle" },
-              { value: "accel_x", label: "Accel X" },
-              { value: "accel_y", label: "Accel Y" },
+              { value: "accel_x", label: "Acceleration" },
+              { value: "accel_y", label: "Cornerning" },
               { value: "rpm", label: "RPM" }
             ] as option}
               <label class="radio-option">
@@ -518,6 +512,7 @@
           <option value="accel_x">Accel X</option>
           <option value="accel_y">Accel Y</option>
           <option value="rpm">RPM</option>
+          <option value="avg_mpg">Average MPG</option>
         </select>
 
         <div class="div-container" id="live-data-container">
@@ -525,6 +520,7 @@
           <p class="live-data">Speed: {liveSpeed}</p>
           <p class="live-data">RPM: {liveRPM}</p>
           <p class="live-data">Instant MPG: {liveInstantMPG}</p>
+          <p class="live-data">Average MPG: {liveAvgMPG}</p>  
           <p class="live-data">Throttle: {liveThrottle}</p>
           <p class="live-data">Accel X: {liveAccelX}</p>
           <p class="live-data">Accel Y: {liveAccelY}</p>
