@@ -1,72 +1,83 @@
 <script>
-  import { onMount, tick } from "svelte";
-  import L from "leaflet";
-  import "leaflet/dist/leaflet.css";
-  import Chart from "chart.js/auto";
-  import { confirm } from '@tauri-apps/plugin-dialog';
+  import { onMount, tick } from "svelte"; // Svelte functions
+  import L from "leaflet"; // Leaflet for maps
+  import "leaflet/dist/leaflet.css"; // Leaflet CSS
+  import Chart from "chart.js/auto"; // Chart.js for graphs
+  import { confirm } from '@tauri-apps/plugin-dialog'; // Tauri dialog for confirmation prompts
 
-
-  
- // Fixes icon issue when build 
+  //------------------------------------------------------------------------------  
+  // Leaflet icon paths when bundling/building the app
+  //------------------------------------------------------------------------------
   delete L.Icon.Default.prototype._getIconUrl;
-
   L.Icon.Default.mergeOptions({
-  iconRetinaUrl: "/marker-icon-2x.png",
-  iconUrl: "/marker-icon.png",
-  shadowUrl: "/marker-shadow.png"
-});
-  let map;
-  let routeData = [];
-  let markers = [];
-  let showPoints = true;
-  let selectedMetric = "default";
-
-  let message = "Not Connected";
-  let processingMode = "post";
-
-  let days = [];
-  let selectedDay = "";
-  let drives = [];
-  let selectedDrive = "";
-  
+    iconRetinaUrl: "/marker-icon-2x.png",
+    iconUrl: "/marker-icon.png",
+    shadowUrl: "/marker-shadow.png"
+  });
 
 
-  // Chart instances
+  let map;                   // Leaflet map instance
+  let routeData = [];        // Array of GPS/OBD/IMU data points
+  let markers = [];          // Array of Leaflet marker instances
+  let showPoints = true;     // Toggle whether to show markers
+  let selectedMetric = "default";  // Metric used to color the route line
+
+  // Connection & mode
+  let message = "Not Connected";  // Connection status message
+  let processingMode = "post";    // "post", "real-time", or "Settings"
+
+  // Day/Drive selection
+  let days = [];             // List of available recording days
+  let selectedDay = "";      // Currently selected day
+  let drives = [];           // List of drives for that day
+  let selectedDrive = "";    // Currently selected drive file
+
+  // Chart.js instances
   let chart1, chart2, chart3, chart4, chart5, chart6, chart7, chart8;
-  // Canvas element references using bind:this
-  let chart1Canvas, chart2Canvas, chart3Canvas, chart4Canvas, chart5Canvas, chart6Canvas, chart7Canvas, chart8Canvas;
+  let chart1Canvas, chart2Canvas, chart3Canvas, chart4Canvas;
+  let chart5Canvas, chart6Canvas, chart7Canvas, chart8Canvas;
 
-  // Variables for live data
-  let liveTime = "";
-  let liveSpeed = "";
-  let liveRPM = "";
-  let liveInstantMPG = "";
-  let liveAvgMPG = "";  
-  let liveThrottle = "";
-  let liveAccelX = "";
-  let liveAccelY = "";
+  // Live data display variables
+  let liveTime = "", liveSpeed = "", liveRPM = "";
+  let liveInstantMPG = "", liveAvgMPG = "";
+  let liveThrottle = "", liveAccelX = "", liveAccelY = "";
+  let speedMetric = "mph";   // Display speed in "mph" or "kph"
 
-  let speedMetric = "mph";
-
+  // SD card info (Settings mode)
   let sdStatus = "Loading...";
   let totalSize = "Loading...";
   let usedSize = "Loading...";
   let freeSize = "Loading...";
   let upTime = "Loading...";
 
-  // Live data polling interval
+  // Interval handle for live polling
   let liveDataInterval;
 
+  //------------------------------------------------------------------------------  
+  // onMount(): initialise Leaflet map and tile layer
+  //------------------------------------------------------------------------------
+  onMount(() => {
+    map = L.map("map").setView([0, 0], 2);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution:
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
+    }).addTo(map);
+  });
+
+  //------------------------------------------------------------------------------  
+  // checkConnection()
+  // - Tests HTTP GET to root endpoint to see if ESP32 server is reachable
+  // - Sets `message` to "Connected" or "Not Connected"
+  // - On success, triggers `fetchDays()` to populate UI
+  //------------------------------------------------------------------------------
   async function checkConnection() {
     try {
-      console.log("Fetching connection status...");
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 1000);
       const response = await fetch("http://192.168.4.1/", { signal: controller.signal });
       clearTimeout(timeout);
       if (!response.ok) throw new Error("Network response error");
       const text = await response.text();
-
       if (text.includes("Connected")) {
         message = "Connected";
         fetchDays();
@@ -77,21 +88,29 @@
       console.error("Fetch error:", error);
       message = "Not Connected";
     }
-    await tick();
+    await tick();  // wait for UI to update
   }
 
+  //------------------------------------------------------------------------------  
+  // handleProcessingModeChange()
+  // - Called when processingMode select changes
+  // - If user switches to "Settings", fetch SD card info
+  //------------------------------------------------------------------------------
   function handleProcessingModeChange() {
     if (processingMode === "Settings") {
       fetchDeviceInfo();
     }
   }
 
+  //------------------------------------------------------------------------------  
+  // fetchDeviceInfo()
+  // - GET /sdinfo to retrieve SD card status, sizes, and ESP32 uptime
+  // - Populates SD info variables or sets to "Fail" on error
+  //------------------------------------------------------------------------------
   async function fetchDeviceInfo() {
     try {
-      console.log("Fetching SD card info...");
       const response = await fetch("http://192.168.4.1/sdinfo");
       if (!response.ok) throw new Error("Failed to fetch SD info");
-
       const data = await response.json();
       sdStatus = data.sd_status;
       totalSize = data.total_size.toFixed(2) + " MB";
@@ -100,18 +119,19 @@
       upTime = data.esp32_uptime_sec + " Seconds";
     } catch (error) {
       console.error("Error fetching SD info:", error);
-      sdStatus = "Fail";
-      totalSize = "Fail";
-      usedSize = "Fail";
-      freeSize = "Fail";
-      upTime = "Fail";
+      sdStatus = totalSize = usedSize = freeSize = upTime = "Fail";
     }
     await tick();
   }
 
+  //------------------------------------------------------------------------------  
+  // fetchDays()
+  // - GET /days to list date directories on SD card
+  // - Populates `days` array and sets default selectedDay
+  // - Triggers fetchDrives()
+  //------------------------------------------------------------------------------
   async function fetchDays() {
     try {
-      console.log("Fetching available days...");
       const response = await fetch("http://192.168.4.1/days");
       if (!response.ok) throw new Error("Failed to fetch days");
       days = await response.json();
@@ -125,10 +145,14 @@
     await tick();
   }
 
+  //------------------------------------------------------------------------------  
+  // fetchDrives()
+  // - GET /drives?day=YYYY-MM-DD to list JSON files for selectedDay
+  // - Populates `drives` array and sets default selectedDrive
+  //------------------------------------------------------------------------------
   async function fetchDrives() {
     if (!selectedDay) return;
     try {
-      console.log(`Fetching drives for ${selectedDay}...`);
       const response = await fetch(`http://192.168.4.1/drives?day=${selectedDay}`);
       if (!response.ok) throw new Error("Failed to fetch drives");
       drives = await response.json();
@@ -141,26 +165,31 @@
     await tick();
   }
 
+  //------------------------------------------------------------------------------  
+  // loadDrive()
+  // - GET /drive?day=...&drive=... to stream a selected drive JSON file
+  // - Parses newline-delimited JSON into `routeData[]`
+  // - Recenters map and updates map, markers and charts
+  //------------------------------------------------------------------------------
   async function loadDrive() {
     if (!selectedDay || !selectedDrive) return;
     try {
-      console.log(`Loading drive ${selectedDrive} for day ${selectedDay}...`);
-      const response = await fetch(`http://192.168.4.1/drive?day=${selectedDay}&drive=${selectedDrive}`);
+      const response = await fetch(
+        `http://192.168.4.1/drive?day=${selectedDay}&drive=${selectedDrive}`
+      );
       if (!response.ok) throw new Error("Failed to load drive");
-
       const text = await response.text();
-      const driveData = text
-          .split("\n")
-          .filter(line => line.trim() !== "")
-          .map(line => JSON.parse(line));
-      
-      routeData = driveData;
+      routeData = text
+        .split("\n")
+        .filter(line => line.trim())
+        .map(line => JSON.parse(line));
       await tick();
-
-      if (routeData.length > 0) {
-        map.setView([routeData[0].gps.latitude, routeData[0].gps.longitude], 14);
+      if (routeData.length) {
+        map.setView(
+          [routeData[0].gps.latitude, routeData[0].gps.longitude],
+          14
+        );
       }
-
       updateRouteLine();
       updateMarkers();
       updateCharts();
@@ -169,41 +198,49 @@
     }
   }
 
+  //------------------------------------------------------------------------------  
+  // fetchLiveData()
+  // - GET /live for the latest drive data chunk
+  // - Appends new data points to `routeData`
+  // - Updates live display variables, map, and charts
+  //------------------------------------------------------------------------------
   async function fetchLiveData() {
     try {
-      console.log("Fetching live data...");
       const response = await fetch("http://192.168.4.1/live");
       if (!response.ok) throw new Error("Failed to fetch live data");
       const text = await response.text();
       const liveData = text
-          .split("\n")
-          .filter(line => line.trim() !== "")
-          .map(line => JSON.parse(line));
+        .split("\n")
+        .filter(line => line.trim())
+        .map(line => JSON.parse(line));
 
-      if (liveData.length > 0) {
-        // Append new data if it’s new
+      if (liveData.length) {
+        // Avoid duplicates by checking timestamp
         if (
-          routeData.length === 0 ||
+          !routeData.length ||
           routeData[routeData.length - 1].gps.time !== liveData[0].gps.time
         ) {
           routeData = [...routeData, ...liveData];
-          const latestPoint = liveData[liveData.length - 1].gps;
-          map.setView([latestPoint.latitude, latestPoint.longitude], 16, { animate: true });
-        } else {
-          console.log("Duplicate data");
+          const last = liveData[liveData.length - 1].gps;
+          map.setView([last.latitude, last.longitude], 16, {
+            animate: true
+          });
         }
       }
 
       await tick();
 
-      if (routeData.length > 0) {
+      // Update live UI fields
+      if (routeData.length) {
         const latest = routeData[routeData.length - 1];
         liveTime = latest.gps.time;
-        if (speedMetric == "kph") liveSpeed = latest.obd.speed;
-        if (speedMetric == "mph") liveSpeed = (latest.obd.speed * 0.621371).toFixed(2);
+        liveSpeed =
+          speedMetric === "kph"
+            ? latest.obd.speed
+            : (latest.obd.speed * 0.621371).toFixed(2);
         liveRPM = latest.obd.rpm;
         liveInstantMPG = latest.obd.instant_mpg.toFixed(2);
-        liveAvgMPG = latest.obd.avg_mpg.toFixed(2);  
+        liveAvgMPG = latest.obd.avg_mpg.toFixed(2);
         liveThrottle = latest.obd.throttle;
         liveAccelX = (latest.imu.accel_x * 0.001 * 9.81).toFixed(2);
         liveAccelY = (latest.imu.accel_y * 0.001 * 9.81).toFixed(2);
@@ -217,81 +254,14 @@
     }
   }
 
-  // Delete the entire day folder (all drives for the selected day)
-  async function deleteDayFolder() {
-    if (!selectedDay) return;
-    const userConfirmed = await confirm(
-      `Are you sure you want to delete all drives for ${selectedDay}?`,
-      { title: "Confirm Delete" }
-    );
-    if (!userConfirmed) return;
-
-    try {
-      console.log(`Deleting day folder: /${selectedDay}`);
-      const response = await fetch(`http://192.168.4.1/delete?path=/${selectedDay}`, {
-        method: "DELETE"
-      });
-      if (!response.ok) throw new Error("Failed to delete day folder");
-      console.log("All drives for the day have been deleted successfully.");
-      await fetchDays();
-      await fetchDrives();
-    } catch (error) {
-      console.error("Error deleting day folder:", error);
-    }
-  }
-
-  // Delete only the selected drive file within the selected day folder.
-  async function deleteDriveFile() {
-    if (!selectedDrive) {
-      console.log("No drive selected for deletion.");
-      return;
-    }
-    const userConfirmed = await confirm(
-      `Are you sure you want to delete the drive file ${selectedDrive}?`,
-      { title: "Confirm Delete" }
-    );
-    if (!userConfirmed) return;
-
-    try {
-      const path = `/${selectedDay}/${selectedDrive}`;
-      console.log(`Deleting drive file: ${path}`);
-      const response = await fetch(
-        `http://192.168.4.1/delete?path=${encodeURIComponent(path)}`,
-        { method: "DELETE" }
-      );
-      if (!response.ok) throw new Error("Failed to delete drive file");
-      console.log("The drive file has been deleted successfully.");
-      await fetchDrives();
-    } catch (error) {
-      console.error("Error deleting drive file:", error);
-    }
-  }
-
-  // Initialise the map 
-  onMount(() => {
-    map = L.map("map").setView([0, 0], 2);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-    }).addTo(map);
-  });
-
-
-
-  // Whenever routeData changes, update map overlays and charts.
-  $: if (routeData.length) {
-    updateRouteLine();
-    updateMarkers();
-    updateCharts();
-  }
-
-  // Manage live polling based on processing mode.
+  //------------------------------------------------------------------------------  
+  // Reactive: manage live polling based on processingMode
+  //------------------------------------------------------------------------------
   $: {
     if (processingMode === "real-time") {
       routeData = [];
       updateRouteLine();
       updateMarkers();
-
       if (!liveDataInterval) {
         checkConnection();
         fetchLiveData();
@@ -305,14 +275,76 @@
     }
   }
 
-  // Chart creation helper.
+  //------------------------------------------------------------------------------  
+  // Reactive: when routeData changes, refresh overlays and charts
+  //------------------------------------------------------------------------------
+  $: if (routeData.length) {
+    updateRouteLine();
+    updateMarkers();
+    updateCharts();
+  }
+
+
+
+  //------------------------------------------------------------------------------  
+  // deleteDayFolder()
+  // - Prompts user for confirmation, then DELETE /delete?path=/YYYY-MM-DD
+  // - On success, refreshes days & drives lists
+  //------------------------------------------------------------------------------
+  async function deleteDayFolder() {
+    if (!selectedDay) return;
+    const ok = await confirm(
+      `Delete all drives for ${selectedDay}?`,
+      { title: "Confirm Delete" }
+    );
+    if (!ok) return;
+    try {
+      const response = await fetch(
+        `http://192.168.4.1/delete?path=/${selectedDay}`,
+        { method: "DELETE" }
+      );
+      if (!response.ok) throw new Error("Delete failed");
+      await fetchDays();
+      await fetchDrives();
+    } catch (error) {
+      console.error("Error deleting day folder:", error);
+    }
+  }
+
+  //------------------------------------------------------------------------------  
+  // deleteDriveFile()
+  // - Prompts user for confirmation, then DELETE /delete?path=/YYYY-MM-DD/drive.json
+  // - On success, refreshes drives list
+  //------------------------------------------------------------------------------
+  async function deleteDriveFile() {
+    if (!selectedDrive) return;
+    const ok = await confirm(
+      `Delete drive ${selectedDrive}?`,
+      { title: "Confirm Delete" }
+    );
+    if (!ok) return;
+    try {
+      const path = `/${selectedDay}/${selectedDrive}`;
+      const response = await fetch(
+        `http://192.168.4.1/delete?path=${encodeURIComponent(path)}`,
+        { method: "DELETE" }
+      );
+      if (!response.ok) throw new Error("Delete failed");
+      await fetchDrives();
+    } catch (error) {
+      console.error("Error deleting drive file:", error);
+    }
+  }
+
+
+  //------------------------------------------------------------------------------  
+  // createChart()
+  // - Helper to instantiate a Chart.js line chart with given params
+  //------------------------------------------------------------------------------
   const createChart = (canvas, label, data, color, xLabel, yLabel, labels) => {
     return new Chart(canvas, {
       type: "line",
-      data: {
-        labels,
-        datasets: [{ label, data, borderColor: color, fill: false }]
-      },
+      data: { labels, datasets: [{ label, data, borderColor: color, fill: false }] },
       options: {
         animation: false,
         responsive: true,
@@ -325,123 +357,114 @@
     });
   };
 
+  //------------------------------------------------------------------------------  
+  // updateCharts()
+  // - Destroys old charts, builds new ones from routeData
+  //------------------------------------------------------------------------------
   async function updateCharts() {
-    // Wait for DOM to update so that the canvases are available
-    await tick();
+    await tick();  // ensure canvases are in DOM
 
-    const timestamps = routeData.map((entry) => entry.gps.time);
-    let speeds;
-    if (speedMetric == "kph") {
-      speeds = routeData.map((entry) => entry.obd.speed);
-    } else {
-      speeds = routeData.map((entry) => entry.obd.speed * 0.621371);
-    }
-    const rpms = routeData.map((entry) => entry.obd.rpm);
-    const instantMpg = routeData.map((entry) => entry.obd.instant_mpg);
-    const avgMpg = routeData.map((entry) => entry.obd.avg_mpg);
-    const throttlePositions = routeData.map((entry) => entry.obd.throttle);
-    const mafValues = routeData.map((entry) => entry.obd.maf);
-    const accelX = routeData.map((entry) => entry.imu.accel_x * 0.001 * 9.81);
-    const accelY = routeData.map((entry) => entry.imu.accel_y * 0.001 * 9.81);
+    const timestamps = routeData.map(e => e.gps.time);
+    const speeds = routeData.map(e =>
+      speedMetric === "kph" ? e.obd.speed : e.obd.speed * 0.621371
+    );
+    const rpms = routeData.map(e => e.obd.rpm);
+    const instMpg = routeData.map(e => e.obd.instant_mpg);
+    const avgMpg = routeData.map(e => e.obd.avg_mpg);
+    const throttle = routeData.map(e => e.obd.throttle);
+    const maf = routeData.map(e => e.obd.maf);
+    const accelX = routeData.map(e => e.imu.accel_x * 0.001 * 9.81);
+    const accelY = routeData.map(e => e.imu.accel_y * 0.001 * 9.81);
 
-    if (chart1) chart1.destroy();
-    if (chart2) chart2.destroy();
-    if (chart3) chart3.destroy();
-    if (chart4) chart4.destroy();
-    if (chart5) chart5.destroy();
-    if (chart6) chart6.destroy();
-    if (chart7) chart7.destroy();
-    if (chart8) chart8.destroy();
+    // Destroy existing charts if they exist
+    [chart1,chart2,chart3,chart4,chart5,chart6,chart7,chart8].forEach(c => c && c.destroy());
 
-    if (speedMetric == "kph") {
-      chart1 = createChart(chart1Canvas, "Speed (kph)", speeds, "orange", "Time", "Speed (kph)", timestamps);
-    } else {
-      chart1 = createChart(chart1Canvas, "Speed (mph)", speeds, "orange", "Time", "Speed (mph)", timestamps);
-    }
+    // Create new charts
+    chart1 = createChart(chart1Canvas, `Speed (${speedMetric})`, speeds, "orange", "Time", `Speed (${speedMetric})`, timestamps);
     chart2 = createChart(chart2Canvas, "RPM", rpms, "red", "Time", "RPM", timestamps);
-    chart3 = createChart(chart3Canvas, "Instant MPG", instantMpg, "green", "Time", "MPG", timestamps);
+    chart3 = createChart(chart3Canvas, "Instant MPG", instMpg, "green", "Time", "MPG", timestamps);
     chart4 = createChart(chart4Canvas, "Average MPG", avgMpg, "purple", "Time", "MPG", timestamps);
-    chart5 = createChart(chart5Canvas, "Throttle Position", throttlePositions, "brown", "Time", "Throttle (%)", timestamps);
-    chart6 = createChart(chart6Canvas, "Accel X", accelX, "magenta", "Time", "Acceleration (m/s²)", timestamps);
-    chart7 = createChart(chart7Canvas, "Accel Y", accelY, "darkblue", "Time", "Acceleration (m/s²)", timestamps);
-    chart8 = createChart(chart8Canvas, "MAF", mafValues, "cyan", "Time", "MAF (g/s)", timestamps);
+    chart5 = createChart(chart5Canvas, "Throttle Position", throttle, "brown", "Time", "% Throttle", timestamps);
+    chart6 = createChart(chart6Canvas, "Accel X (m/s²)", accelX, "magenta", "Time", "Accel X", timestamps);
+    chart7 = createChart(chart7Canvas, "Accel Y (m/s²)", accelY, "darkblue", "Time", "Accel Y", timestamps);
+    chart8 = createChart(chart8Canvas, "MAF (g/s)", maf, "cyan", "Time", "MAF", timestamps);
   }
 
+  //------------------------------------------------------------------------------  
+  // updateMarkers()
+  // - Clears old markers, then adds new markers for each point if showPoints
+  // - Binds a popup displaying time, speed, RPM, mpg, throttle, accel
+  //------------------------------------------------------------------------------
   function updateMarkers() {
-    markers.forEach((marker) => marker.remove());
+    markers.forEach(m => m.remove());
     markers = [];
-
-    if (showPoints) {
-      routeData.forEach((point) => {
-        const { latitude, longitude, time } = point.gps;
-        const { speed, rpm, instant_mpg, throttle, avg_mpg } = point.obd;
-        const marker = L.marker([latitude, longitude]).addTo(map);
-        if (speedMetric == "mph") {
-            marker.bindPopup(`
-            <b>Time:</b> ${time}<br>
-            <b>Speed:</b> ${(speed * 0.621371).toFixed(2)} mph<br>
-            <b>RPM:</b> ${rpm}<br>
-            <b>Instant MPG:</b> ${instant_mpg.toFixed(2)}<br>
-            <b>Average MPG:</b> ${avg_mpg.toFixed(2)}<br>
-            <b>Throttle:</b> ${throttle}%<br>
-            <b>Cornerning:</b> ${(point.imu.accel_y * 0.001 * 9.81).toFixed(2)} m/s²<br>
-            <b>Acceleration:</b> ${(point.imu.accel_x * 0.001 * 9.81).toFixed(2)} m/s²
-            `);
-        } else {
-          marker.bindPopup(`
-            <b>Time:</b> ${time}<br>
-            <b>Speed:</b> ${speed} km/h<br>
-            <b>RPM:</b> ${rpm}<br>
-            <b>Instant MPG:</b> ${instant_mpg.toFixed(2)}<br>
-            <b>Average MPG:</b> ${avg_mpg.toFixed(2)}<br>
-            <b>Throttle:</b> ${throttle}%
-            <b>Cornerning:</b> ${(point.imu.accel_y * 0.001 * 9.81).toFixed(2)} m/s²<br>
-            <b>Acceleration:</b> ${(point.imu.accel_x * 0.001 * 9.81).toFixed(2)} m/s²
-          `);
-        }
-        markers.push(marker);
-      });
+    if (!showPoints) return;
+    for (const point of routeData) {
+      const { latitude, longitude, time } = point.gps;
+      const { speed, rpm, instant_mpg, avg_mpg, throttle } = point.obd;
+      const m = L.marker([latitude, longitude]).addTo(map);
+      const spdText = speedMetric === "mph"
+        ? `${(speed * 0.621371).toFixed(2)} mph`
+        : `${speed} km/h`;
+      const popup = `
+        <b>Time:</b> ${time}<br>
+        <b>Speed:</b> ${spdText}<br>
+        <b>RPM:</b> ${rpm}<br>
+        <b>Instant MPG:</b> ${instant_mpg.toFixed(2)}<br>
+        <b>Average MPG:</b> ${avg_mpg.toFixed(2)}<br>
+        <b>Throttle:</b> ${throttle}%<br>
+        <b>Accel X:</b> ${(point.imu.accel_x * 0.001 * 9.81).toFixed(2)} m/s²<br>
+        <b>Accel Y:</b> ${(point.imu.accel_y * 0.001 * 9.81).toFixed(2)} m/s²
+      `;
+      m.bindPopup(popup);
+      markers.push(m);
     }
   }
 
+  //------------------------------------------------------------------------------  
+  // updateRouteLine()
+  // - Removes existing polylines then draws new ones colored by selectedMetric
+  // - Default = solid line, or color-scale based on metric value
+  //------------------------------------------------------------------------------
   function updateRouteLine() {
-    map.eachLayer((layer) => {
-      if (layer instanceof L.Polyline) {
-        map.removeLayer(layer);
-      }
+    // Remove old lines
+    map.eachLayer(layer => {
+      if (layer instanceof L.Polyline) map.removeLayer(layer);
     });
 
-    const route = routeData.map((point) => [point.gps.latitude, point.gps.longitude]);
-    if (route.length < 2) return;
+    // Build coordinate array
+    const coords = routeData.map(p => [p.gps.latitude, p.gps.longitude]);
+    if (coords.length < 2) return;
 
-    let metricValues;
-    if (selectedMetric === "accel_x" || selectedMetric === "accel_y") {
-      metricValues = routeData.map((point) => point.imu[selectedMetric] * 0.001 * 9.81);
-    } else if (selectedMetric === "default") {
-      metricValues = routeData.map(() => 1);
-    } else {
-      metricValues = routeData.map((point) => point.obd[selectedMetric]);
-    }
+    // Extract metric values for coloring
+    let vals = routeData.map((_p, i) => {
+      if (selectedMetric === "default") return 1;
+      if (["accel_x","accel_y"].includes(selectedMetric)) {
+        return routeData[i].imu[selectedMetric] * 0.001 * 9.81;
+      }
+      return routeData[i].obd[selectedMetric];
+    });
 
-    const maxMetric = Math.max(...metricValues);
-    const minMetric = Math.min(...metricValues);
-    const range = maxMetric - minMetric || 1;
+    const min = Math.min(...vals), max = Math.max(...vals), range = max - min || 1;
 
-    for (let i = 0; i < route.length - 1; i++) {
-      const start = route[i];
-      const end = route[i + 1];
-      const normalizedValue = (metricValues[i] - minMetric) / range;
-      const color = `rgb(${255 * normalizedValue}, 0, ${255 * (1 - normalizedValue)})`;
-      L.polyline([start, end], { color, weight: 5 }).addTo(map);
+    // Draw each segment with gradient color
+    for (let i = 0; i < coords.length - 1; i++) {
+      const t = (vals[i] - min) / range;
+      const color = `rgb(${255 * t},0,${255 * (1 - t)})`;
+      L.polyline([coords[i], coords[i+1]], { color, weight: 5 }).addTo(map);
     }
   }
 
+  //------------------------------------------------------------------------------  
+  // togglePoints()
+  // - Toggles marker visibility on map
+  //------------------------------------------------------------------------------
   function togglePoints() {
     showPoints = !showPoints;
     updateMarkers();
   }
 
-  // Initial connection check.
+ // Inital connection check
   checkConnection();
 </script>
 
@@ -529,7 +552,11 @@
 
         <div class="div-container" id="live-data-container">
           <p class="live-data">Time: {liveTime}</p>
-          <p class="live-data">Speed: {liveSpeed}</p>
+          {#if speedMetric === "kph"}
+            <p class="live-data">Speed (kph): {liveSpeed}</p>
+          {:else}
+            <p class="live-data">Speed (mph): {liveSpeed}</p>
+          {/if}
           <p class="live-data">RPM: {liveRPM}</p>
           <p class="live-data">Instant MPG: {liveInstantMPG}</p>
           <p class="live-data">Average MPG: {liveAvgMPG}</p>  

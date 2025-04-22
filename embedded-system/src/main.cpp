@@ -251,7 +251,7 @@ void loop() {
             Wire1.setPins(SDA1, SCL1);
             Wire1.begin();
             if (myGNSS.begin(Wire1)) {
-                Serial.println("GPS Module Initialized");
+                Serial.println("GNSS Module Initialized");
                 myGNSS.setI2COutput(COM_TYPE_UBX);
                 gnssInitialized = true;
             } else {

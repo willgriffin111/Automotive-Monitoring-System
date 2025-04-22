@@ -4,84 +4,147 @@
 // Constructor
 OBD::OBD() {}
 
-// Initialisation
+//-------------------------------------------------------------------------------
+// initialise()
+//   - Starts Serial1 at 9600 baud to communicate with the OBD adapter.
+//   - Calls init() with PROTO_AUTO to let the library negotiate the correct
+//     OBD protocol automatically.
+// Returns:
+//   - true if init() succeeds, false otherwise.
+//-------------------------------------------------------------------------------
 bool OBD::initialise() {
-    Serial1.begin(9600);  // Start communication on Serial1 at 9600 baud
-    return init(PROTO_AUTO); // Use automatic protocol detection
+    Serial1.begin(9600);            
+    return init(PROTO_AUTO);        
 }
 
-// Send PID Command
+//-------------------------------------------------------------------------------
+// sendPIDCommand(pid, response, bufsize)
+//   - Sends an OBD-II PID request string (e.g., "010C").
+//   - Waits up to OBD_TIMEOUT_LONG ms for a response.
+//   - Fills the provided buffer with the reply 
+// Parameters:
+//   - pid:      String of the PID command.
+//   - response: char array to receive the reply.
+//   - bufsize:  Size of the response buffer.
+// Returns:
+//   - true if any bytes were received before timeout, false on timeout.
+//-------------------------------------------------------------------------------
 bool OBD::sendPIDCommand(const char* pid, char* response, int bufsize) {
     unsigned long startTime = millis();
-    write(pid);
+    write(pid);  // Transmit the PID request
 
+    // Loop until we receive data or timeout
     while (millis() - startTime < OBD_TIMEOUT_LONG) {
-        if (receive(response, bufsize, OBD_TIMEOUT_LONG) > 0) {
-            return true;
+        int len = receive(response, bufsize, OBD_TIMEOUT_LONG);
+        if (len > 0) {
+            return true;  // Successful read
         }
     }
-
+    // Timeout without data
     return false;
 }
 
-// Parse Hex Value
+//-------------------------------------------------------------------------------
+// parseHexValue(response, startIndex, length)
+//   - Parses a substring of ASCII hex digits into an integer.
+// Parameters:
+//   - response:    Response string.
+//   - startIndex:  Index in the string where hex digits begin.
+//   - length:      Number of hex characters to parse.
+// Returns:
+//   - Integer value of the parsed hex substring.
+//-------------------------------------------------------------------------------
 int OBD::parseHexValue(const char* response, int startIndex, int length) {
+    // strtol will stop after 'length' hex digits or at NUL
     return strtol(&response[startIndex], NULL, 16);
 }
 
-// Read RPM
+//-------------------------------------------------------------------------------
+// readRPM(rpm)
+//   - Queries PID 0x0C to get engine RPM.
+//   - Response format: "41 0C AA BB", where RPM = ((AA*256) + BB) / 4.
+// Parameters:
+//   - rpm: Reference to an int to store the result.
+// Returns:
+//   - true on success (rpm set), false otherwise.
+//-------------------------------------------------------------------------------
 bool OBD::readRPM(int& rpm) {
     char response[64];
     if (sendPIDCommand("010C", response, sizeof(response))) {
-        char* rpmPtr = strstr(response, "41 0C");
-        if (rpmPtr != nullptr) {
-            int A = parseHexValue(rpmPtr, 6, 2);
-            int B = parseHexValue(rpmPtr, 9, 2);
-            rpm = ((A * 256) + B) / 4;
+        // Find the "41 0C" header in the reply
+        char* ptr = strstr(response, "41 0C");
+        if (ptr) {
+            int A = parseHexValue(ptr, 6, 2);  // Byte A at offset 6
+            int B = parseHexValue(ptr, 9, 2);  // Byte B at offset 9
+            rpm = ((A * 256) + B) / 4;          // Compute RPM
             return true;
         }
     }
     return false;
 }
 
-// Read Speed (in KPH)
+//-------------------------------------------------------------------------------
+// readSpeed(speed_kph)
+//   - Queries PID 0x0D to get vehicle speed in km/h.
+//   - Response: "41 0D AA", where speed_kph = AA.
+// Parameters:
+//   - speed_kph: Reference to an int to store the speed.
+// Returns:
+//   - true on success, false otherwise.
+//-------------------------------------------------------------------------------
 bool OBD::readSpeed(int& speed_kph) {
     char response[64];
     if (sendPIDCommand("010D", response, sizeof(response))) {
-        char* speedPtr = strstr(response, "41 0D");
-        if (speedPtr != nullptr) {
-            speed_kph = parseHexValue(speedPtr, 6, 2);
+        char* ptr = strstr(response, "41 0D");
+        if (ptr) {
+            speed_kph = parseHexValue(ptr, 6, 2);  // Single byte value
             return true;
         }
     }
     return false;
 }
 
-// Read MAF (grams/sec)
+//-------------------------------------------------------------------------------
+// readMAF(maf)
+//   - Queries PID 0x10 to get mass air flow sensor data (g/s).
+//   - Response: "41 10 AA BB", where maf = ((AA*256) + BB) / 100.
+// Parameters:
+//   - maf: Reference to a float to store grams per second.
+// Returns:
+//   - true on success, false otherwise.
+//-------------------------------------------------------------------------------
 bool OBD::readMAF(float& maf) {
     char response[64];
     if (sendPIDCommand("0110", response, sizeof(response))) {
-        char* mafPtr = strstr(response, "41 10");
-        if (mafPtr != nullptr) {
-            int A = parseHexValue(mafPtr, 6, 2);
-            int B = parseHexValue(mafPtr, 9, 2);
-            maf = ((A * 256) + B) / 100.0;
+        char* ptr = strstr(response, "41 10");
+        if (ptr) {
+            int A = parseHexValue(ptr, 6, 2);
+            int B = parseHexValue(ptr, 9, 2);
+            maf = ((A * 256) + B) / 100.0;  // Convert to g/s
             return true;
         }
     }
     return false;
 }
 
-// Read Throttle Position (%)
+//-------------------------------------------------------------------------------
+// readThrottle(throttle)
+//   - Queries PID 0x4A for absolute throttle position (%).
+//   - Response: "41 4A AA", where position = (AA * 100) / 255.
+// Parameters:
+//   - throttle: Reference to an int to store percentage [0–100].
+// Returns:
+//   - true on success, false otherwise.
+//-------------------------------------------------------------------------------
 bool OBD::readThrottle(int& throttle) {
     char response[64];
     if (sendPIDCommand("014A", response, sizeof(response))) {
-        char* throttlePtr = strstr(response, "41 4A");
-        if (throttlePtr != nullptr && strlen(throttlePtr) >= 5) {
-            char hexValue[3] = {throttlePtr[6], throttlePtr[7], '\0'}; 
-            int hexThrottle = strtol(hexValue, NULL, 16); // Convert hex to integer
-            throttle = (hexThrottle * 100) / 255; // Calculate percentage
-
+        char* ptr = strstr(response, "41 4A");
+        if (ptr && strlen(ptr) >= 8) {
+            // Extract two hex digits after the header
+            char hexVal[3] = { ptr[6], ptr[7], '\0' };
+            int raw = strtol(hexVal, NULL, 16);
+            throttle = (raw * 100) / 255;  // Scale to percent
             return true;
         }
     }
@@ -89,22 +152,38 @@ bool OBD::readThrottle(int& throttle) {
     return false;
 }
 
-
+//-------------------------------------------------------------------------------
+// calculateInstantMPG(speed_kph, maf)
+//   - Converts speed (km/h) to mph and MAF (g/s) to gallons per hour (gph).
+//   - Computes instant MPG = mph / gph.
+// Parameters:
+//   - speed_kph: Vehicle speed in km/h
+//   - maf:       Mass air flow in grams/sec
+// Returns:
+//   - Instant MPG as a float, or 0.0 if inputs invalid.
+//-------------------------------------------------------------------------------
 float OBD::calculateInstantMPG(int speed_kph, float maf) {
     if (speed_kph > 0 && maf > 0) {
-        float speed_mph = speed_kph * 0.621317;
-        float gph = maf * 0.0805;
-        float mpg = speed_mph / gph;
-        return mpg;
+        float mph = speed_kph * 0.621317;     // Convert to miles/hour
+        float gph = maf * 0.0805;             // Convert g/s to gal/hr
+        return mph / gph;
     }
     return 0.0;
 }
 
-// Average MPG Calculation
+//-------------------------------------------------------------------------------
+// calculateAverageMPG(totalSpeedTimeProduct, totalFuelTimeProduct)
+//   - Computes average MPG over a trip given the sum of (speed * delta_t)
+//     and sum of (fuel_flow * delta_t).
+// Parameters:
+//   - totalSpeedTimeProduct: Sum of (speed * time interval)
+//   - totalFuelTimeProduct:  Sum of (fuel flow * time interval)
+// Returns:
+//   - Average MPG, or 0.0 if no fuel consumed.
+//-------------------------------------------------------------------------------
 float OBD::calculateAverageMPG(float totalSpeedTimeProduct, float totalFuelTimeProduct) {
     if (totalFuelTimeProduct > 0) {
-        float average_mpg = totalSpeedTimeProduct / totalFuelTimeProduct;
-        return average_mpg;
+        return totalSpeedTimeProduct / totalFuelTimeProduct;
     }
     return 0.0;
 }

@@ -5,423 +5,459 @@
 #include <ArduinoJson.h>
 #include <iostream>
 
+// External SD filesystem instance and HTTP server on port 80
 extern SdFat SD;
 WebServer server(80);
 
+// Function declaration
 bool deleteRecursively(const char* path);
 
+//-------------------------------------------------------------------------------
+// Ensures a dummy JSON file exists under /test; creates it with sample data if not
+//-------------------------------------------------------------------------------
 void createDummyFileIfNotExists() {
+    // Check if dummy file already exists
     if (!SD.exists("/test/dummy.json")) {
-      Serial.println("Dummy file not found, creating it...");
-      FsFile file = SD.open("/test/dummy.json", O_WRITE | O_CREAT);
-      if (file) {
-        file.print(
-          "{\"gps\":{\"time\":\"16:09:32\",\"latitude\":40.7590,\"longitude\":-73.9860},\"obd\":{\"rpm\":0,\"speed\":0,\"maf\":0.94,\"instant_mpg\":0,\"throttle\":14,\"avg_mpg\":0},\"imu\":{\"accel_x\":-19,\"accel_y\":-4}}\n"
-          "{\"gps\":{\"time\":\"16:09:35\",\"latitude\":40.7590,\"longitude\":-73.9850},\"obd\":{\"rpm\":217,\"speed\":0,\"maf\":2.97,\"instant_mpg\":0,\"throttle\":14,\"avg_mpg\":0},\"imu\":{\"accel_x\":3,\"accel_y\":0}}\n"
-          "{\"gps\":{\"time\":\"16:09:38\",\"latitude\":40.7580,\"longitude\":-73.9850},\"obd\":{\"rpm\":772,\"speed\":0,\"maf\":8.33,\"instant_mpg\":0,\"throttle\":14,\"avg_mpg\":0},\"imu\":{\"accel_x\":1,\"accel_y\":3}}\n"
-          "{\"gps\":{\"time\":\"16:09:41\",\"latitude\":40.7580,\"longitude\":-73.9860},\"obd\":{\"rpm\":778,\"speed\":0,\"maf\":8.16,\"instant_mpg\":0,\"throttle\":14,\"avg_mpg\":0},\"imu\":{\"accel_x\":-1,\"accel_y\":0}}"
-        );
-        file.close();
-        Serial.println("Dummy file created.");
-      } else {
-        Serial.println("Failed to create dummy file.");
-      }
+        Serial.println("Dummy file not found, creating it...");
+        // Open (or create) file for writing
+        FsFile file = SD.open("/test/dummy.json", O_WRITE | O_CREAT);
+        if (file) {
+            // Write data
+            file.print(
+                "{\"gps\":{\"time\":\"16:09:32\",\"latitude\":40.7590,\"longitude\":-73.9860},"
+                "\"obd\":{\"rpm\":0,\"speed\":0,\"maf\":0.94,\"instant_mpg\":0,"
+                "\"throttle\":14,\"avg_mpg\":0},\"imu\":{\"accel_x\":-19,\"accel_y\":-4}}\n"
+                "{\"gps\":{\"time\":\"16:09:35\",\"latitude\":40.7590,\"longitude\":-73.9850},"
+                "\"obd\":{\"rpm\":217,\"speed\":0,\"maf\":2.97,\"instant_mpg\":0,"
+                "\"throttle\":14,\"avg_mpg\":0},\"imu\":{\"accel_x\":3,\"accel_y\":0}}\n"
+                "{\"gps\":{\"time\":\"16:09:38\",\"latitude\":40.7580,\"longitude\":-73.9850},"
+                "\"obd\":{\"rpm\":772,\"speed\":0,\"maf\":8.33,\"instant_mpg\":0,"
+                "\"throttle\":14,\"avg_mpg\":0},\"imu\":{\"accel_x\":1,\"accel_y\":3}}\n"
+                "{\"gps\":{\"time\":\"16:09:41\",\"latitude\":40.7580,\"longitude\":-73.9860},"
+                "\"obd\":{\"rpm\":778,\"speed\":0,\"maf\":8.16,\"instant_mpg\":0,"
+                "\"throttle\":14,\"avg_mpg\":0},\"imu\":{\"accel_x\":-1,\"accel_y\":0}}"
+            );
+            file.close();
+            Serial.println("Dummy file created.");
+        } else {
+            Serial.println("Failed to create dummy file.");
+        }
     } else {
-      Serial.println("Dummy file already exists.");
+        // Already present - no action needed
+        Serial.println("Dummy file already exists.");
     }
-  }
+}
 
+//-------------------------------------------------------------------------------
+// Handler for GET /
+// Responds with a simple text to confirm connectivity
+//-------------------------------------------------------------------------------
 void handleRoot() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.send(200, "text/plain", "Connected");
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.send(200, "text/plain", "Connected");
 }
 
+//-------------------------------------------------------------------------------
+// Handler for GET /days
+// Lists top‑level directories (YYYY‑MM‑DD folders) as JSON array
+//-------------------------------------------------------------------------------
 void handleDays() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  Serial.println("Listing available days...");
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    Serial.println("Listing available days...");
 
-  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-    FsFile root = SD.open("/");
-    if (!root) {
-      Serial.println("Failed to open root directory");
-      server.send(500, "text/plain", "Failed to open root directory");
-      xSemaphoreGive(sdMutex);
-      return;
-    }
-
-    String json = "[";
-    bool first = true;
-
-    while (true) {
-      FsFile entry = root.openNextFile();
-      if (!entry)
-        break;
-
-      if (entry.isDir()) {
-        char nameBuffer[32];
-        entry.getName(nameBuffer, sizeof(nameBuffer));
-
-        if (nameBuffer[0] == '.') {
-          entry.close();
-          continue;
+    // Lock SD card for safe multi‑thread access 
+    if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        FsFile root = SD.open("/");
+        if (!root) {
+            // Couldn’t open root directory
+            Serial.println("Failed to open root directory");
+            server.send(500, "text/plain", "Failed to open root directory");
+            xSemaphoreGive(sdMutex);
+            return;
         }
 
-        if (!first)
-          json += ",";
-        json += "\"" + String(nameBuffer) + "\"";
-        first = false;
-      }
-      entry.close();
-    }
-    json += "]";
-    root.close();
+        String json = "[";
+        bool first = true;
 
-    server.send(200, "application/json", json);
-    xSemaphoreGive(sdMutex);
-  } else {
-    Serial.println("SD Mutex timeout in handleDays()");
-    server.send(500, "text/plain", "SD card access timeout");
-  }
+        // Iterate each entry in root
+        while (true) {
+            FsFile entry = root.openNextFile();
+            if (!entry) break;                     // No more entries
+
+            if (entry.isDir()) {
+                char name[32];
+                entry.getName(name, sizeof(name));
+                // Skip hidden dirs starting with '.'
+                if (name[0] != '.') {
+                    if (!first) json += ",";
+                    json += "\"" + String(name) + "\"";
+                    first = false;
+                }
+            }
+            entry.close();
+        }
+        json += "]";
+        root.close();
+
+        // Send JSON list of day folders
+        server.send(200, "application/json", json);
+        xSemaphoreGive(sdMutex);
+    } else {
+        // Mutex lock timed out
+        Serial.println("SD Mutex timeout in handleDays()");
+        server.send(500, "text/plain", "SD card access timeout");
+    }
 }
 
+//-------------------------------------------------------------------------------
+// Handler for GET /drives?day=YYYY-MM-DD
+// Lists all JSON files (drives) under the specified day folder
+//-------------------------------------------------------------------------------
 void handleDrives() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  if (!server.hasArg("day")) {
-    server.send(400, "text/plain", "Missing 'day' parameter");
-    return;
-  }
-
-  String day = server.arg("day");
-  Serial.print("Listing drives for day: ");
-  Serial.println(day);
-
-  String path = "/" + day;
-  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-    FsFile dayDir = SD.open(path.c_str());
-    if (!dayDir || !dayDir.isDir()) {
-      Serial.println("Day folder not found");
-      server.send(404, "text/plain", "Day folder not found");
-      xSemaphoreGive(sdMutex);
-      return;
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    if (!server.hasArg("day")) {
+        // Missing required query parameter
+        server.send(400, "text/plain", "Missing 'day' parameter");
+        return;
     }
 
-    String json = "[";
-    bool first = true;
-    while (true) {
-      FsFile entry = dayDir.openNextFile();
-      if (!entry)
-        break;
+    String day = server.arg("day");
+    Serial.print("Listing drives for day: ");
+    Serial.println(day);
 
-      if (!entry.isDir()) {
-        char nameBuffer[32];
-        entry.getName(nameBuffer, sizeof(nameBuffer));
-
-        if (nameBuffer[0] == '.') {
-          entry.close();
-          continue;
+    String path = "/" + day;
+    if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        FsFile dir = SD.open(path.c_str());
+        if (!dir || !dir.isDir()) {
+            // Folder doesn’t exist
+            Serial.println("Day folder not found");
+            server.send(404, "text/plain", "Day folder not found");
+            xSemaphoreGive(sdMutex);
+            return;
         }
 
-        if (!first)
-          json += ",";
-        json += "\"" + String(nameBuffer) + "\"";
-        first = false;
-      }
-      entry.close();
-    }
-    json += "]";
-    dayDir.close();
+        String json = "[";
+        bool first = true;
+        while (true) {
+            FsFile entry = dir.openNextFile();
+            if (!entry) break;
 
-    server.send(200, "application/json", json);
-    xSemaphoreGive(sdMutex);
-  } else {
-    Serial.println("SD Mutex timeout in handleDrives()");
-    server.send(500, "text/plain", "SD card access timeout");
-  }
+            // Only include files (skip sub-directories)
+            if (!entry.isDir()) {
+                char name[32];
+                entry.getName(name, sizeof(name));
+                if (name[0] != '.') {
+                    if (!first) json += ",";
+                    json += "\"" + String(name) + "\"";
+                    first = false;
+                }
+            }
+            entry.close();
+        }
+        json += "]";
+        dir.close();
+
+        // Return JSON array of drive filenames
+        server.send(200, "application/json", json);
+        xSemaphoreGive(sdMutex);
+    } else {
+        Serial.println("SD Mutex timeout in handleDrives()");
+        server.send(500, "text/plain", "SD card access timeout");
+    }
 }
 
+//-------------------------------------------------------------------------------
+// Handler for GET /drive?day=YYYY-MM-DD&drive=FILE.json
+// Streams the contents of a specific drive file
+//-------------------------------------------------------------------------------
 void handleDrive() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  if (!server.hasArg("day") || !server.hasArg("drive")) {
-    server.send(400, "text/plain", "Missing 'day' or 'drive' parameter");
-    return;
-  }
-  String day = server.arg("day");
-  String driveFile = server.arg("drive");
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    if (!server.hasArg("day") || !server.hasArg("drive")) {
+        server.send(400, "text/plain", "Missing 'day' or 'drive' parameter");
+        return;
+    }
+    String day   = server.arg("day");
+    String drive = server.arg("drive");
 
-  if (day.startsWith(".") || driveFile.startsWith(".")) {
-    server.send(403, "text/plain", "Access forbidden");
-    return;
-  }
-
-  String path = "/" + day + "/" + driveFile;
-  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-    FsFile file = SD.open(path.c_str(), O_READ);
-    if (!file) {
-      server.send(404, "text/plain", "Drive file not found");
-      xSemaphoreGive(sdMutex);
-      return;
+    // Prevent path traversal
+    if (day.startsWith(".") || drive.startsWith(".")) {
+        server.send(403, "text/plain", "Access forbidden");
+        return;
     }
 
-    // Manually stream the file in chunks:
-    server.sendHeader("Content-Type", "application/json");
-    server.setContentLength(file.size());
-    server.send(200);
+    String path = "/" + day + "/" + drive;
+    if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        FsFile file = SD.open(path.c_str(), O_READ);
+        if (!file) {
+            server.send(404, "text/plain", "Drive file not found");
+            xSemaphoreGive(sdMutex);
+            return;
+        }
 
-    const size_t bufferSize = 512;
-    uint8_t buffer[bufferSize];
-    while (file.available()) {
-      size_t bytesRead = file.read(buffer, bufferSize);
-      server.sendContent((const char*)buffer, bytesRead);
+        // Send headers, then stream file in chunks
+        server.sendHeader("Content-Type", "application/json");
+        server.setContentLength(file.size());
+        server.send(200);
+
+        const size_t bufSize = 512;
+        uint8_t buf[bufSize];
+        while (file.available()) {
+            size_t n = file.read(buf, bufSize);
+            server.sendContent((const char*)buf, n);
+        }
+        file.close();
+        xSemaphoreGive(sdMutex);
+    } else {
+        Serial.println("SD Mutex timeout in handleDrive()");
+        server.send(500, "text/plain", "SD card access timeout");
     }
-    file.close();
-    xSemaphoreGive(sdMutex);
-  } else {
-    Serial.println("SD Mutex timeout in handleDrive()");
-    server.send(500, "text/plain", "SD card access timeout");
-  }
 }
 
+//-------------------------------------------------------------------------------
+// Handler for GET /live
+// Finds the most recent date folder and drive file, then streams its contents
+//-------------------------------------------------------------------------------
 void handleLiveData() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  Serial.println("Fetching latest drive data...");
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    Serial.println("Fetching latest drive data...");
 
-  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000))) {
-    FsFile root = SD.open("/");
-    if (!root) {
-      server.send(500, "text/plain", "Failed to open root directory");
-      xSemaphoreGive(sdMutex);
-      return;
-    }
-    String latestDay = "";
-    while (true) {
-      FsFile entry = root.openNextFile();
-      if (!entry)
-        break;
-      if (entry.isDir()) {
-        char nameBuffer[32];
-        entry.getName(nameBuffer, sizeof(nameBuffer));
-        if (strlen(nameBuffer) == 10 && nameBuffer[4] == '-' && nameBuffer[7] == '-') {
-          if (latestDay == "" || String(nameBuffer) > latestDay) {
-            latestDay = nameBuffer;
-          }
+    if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        // 1) Scan root for latest YYYY-MM-DD folder
+        FsFile root = SD.open("/");
+        String latestDay;
+        while (true) {
+            FsFile e = root.openNextFile();
+            if (!e) break;
+            if (e.isDir()) {
+                char n[32];
+                e.getName(n, sizeof(n));
+                // Simple lexicographical compare for YYYY-MM-DD
+                if (strlen(n)==10 && n[4]=='-' && n[7]=='-'
+                    && (latestDay.isEmpty() || String(n) > latestDay)) {
+                    latestDay = n;
+                }
+            }
+            e.close();
         }
-      }
-      entry.close();
-    }
-    root.close();
-    if (latestDay == "") {
-      server.send(404, "text/plain", "No log data found");
-      xSemaphoreGive(sdMutex);
-      return;
-    }
-    String path = "/" + latestDay;
-    FsFile dayDir = SD.open(path.c_str());
-    if (!dayDir || !dayDir.isDir()) {
-      server.send(500, "text/plain", "Could not access latest day folder");
-      xSemaphoreGive(sdMutex);
-      return;
-    }
-    String latestDrive = "";
-    while (true) {
-      FsFile entry = dayDir.openNextFile();
-      if (!entry)
-        break;
-      if (!entry.isDir()) {
-        char nameBuffer[32];
-        entry.getName(nameBuffer, sizeof(nameBuffer));
-        if (strlen(nameBuffer) >= 12 && nameBuffer[2] == '-' && nameBuffer[5] == '-' && strstr(nameBuffer, ".json")) {
-          if (latestDrive == "" || String(nameBuffer) > latestDrive) {
-            latestDrive = nameBuffer;
-          }
+        root.close();
+
+        if (latestDay.isEmpty()) {
+            server.send(404, "text/plain", "No log data found");
+            xSemaphoreGive(sdMutex);
+            return;
         }
-      }
-      entry.close();
-    }
-    dayDir.close();
 
-    if (latestDrive == "") {
-      server.send(404, "text/plain", "No latest drive data found");
-      xSemaphoreGive(sdMutex);
-      return;
-    }
+        // 2) Scan that folder for latest HH-MM-SS*.json file
+        FsFile dayDir = SD.open(("/" + latestDay).c_str());
+        String latestDrive;
+        while (true) {
+            FsFile e = dayDir.openNextFile();
+            if (!e) break;
+            if (!e.isDir()) {
+                char n[32];
+                e.getName(n, sizeof(n));
+                // Check for time‑formatted name
+                if (strlen(n)>=12 && n[2]=='-' && n[5]=='-' && strstr(n, ".json") &&
+                    (latestDrive.isEmpty() || String(n) > latestDrive)) {
+                    latestDrive = n;
+                }
+            }
+            e.close();
+        }
+        dayDir.close();
 
-    String fullPath = "/" + latestDay + "/" + latestDrive;
-    FsFile file = SD.open(fullPath.c_str(), O_READ);
-    if (!file) {
-      server.send(404, "text/plain", "Latest drive file not found");
-      xSemaphoreGive(sdMutex);
-      return;
-    }
+        if (latestDrive.isEmpty()) {
+            server.send(404, "text/plain", "No latest drive data found");
+            xSemaphoreGive(sdMutex);
+            return;
+        }
 
-    server.sendHeader("Content-Type", "application/json");
-    server.setContentLength(file.size());
-    server.send(200);
-
-    const size_t bufferSize = 512;
-    uint8_t buffer[bufferSize];
-    while (file.available()) {
-      size_t bytesRead = file.read(buffer, bufferSize);
-      server.sendContent((const char*)buffer, bytesRead);
+        // 3) Stream that latest file
+        FsFile file = SD.open(("/" + latestDay + "/" + latestDrive).c_str(), O_READ);
+        if (!file) {
+            server.send(404, "text/plain", "Latest drive file not found");
+            xSemaphoreGive(sdMutex);
+            return;
+        }
+        server.sendHeader("Content-Type", "application/json");
+        server.setContentLength(file.size());
+        server.send(200);
+        const size_t bufSize = 512;
+        uint8_t buf[bufSize];
+        while (file.available()) {
+            size_t n = file.read(buf, bufSize);
+            server.sendContent((const char*)buf, n);
+        }
+        file.close();
+        xSemaphoreGive(sdMutex);
+    } else {
+        Serial.println("SD Mutex timeout in handleLiveData()");
+        server.send(500, "text/plain", "SD busy, try again later");
     }
-    file.close();
-    xSemaphoreGive(sdMutex);
-  } else {
-    Serial.println("SD Mutex timeout in handleLiveData()");
-    server.send(500, "text/plain", "SD busy, try again later");
-  }
 }
 
+//-------------------------------------------------------------------------------
+// Handler for GET /sdinfo
+// Reports SD card health and sizes, plus ESP32 uptime
+//-------------------------------------------------------------------------------
 void handleSDInfo() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  Serial.println("Fetching SD diagnostics...");
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    Serial.println("Fetching SD diagnostics...");
 
-  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-    String json = "{";
+    if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        String json = "{";
+        FsVolume* vol = SD.vol();  // Get volume metadata
+        if (!vol) {
+            // No card detected
+            json += "\"sd_status\":\"Not detected\"";
+        } else {
+            // Calculate sizes 
+            uint32_t spc = vol->sectorsPerCluster();
+            uint32_t cc  = vol->clusterCount();
+            uint32_t fc  = vol->freeClusterCount();
+            uint64_t total = (uint64_t)cc * spc * 512;
+            uint64_t free  = (uint64_t)fc * spc * 512;
+            uint64_t used  = total - free;
 
-    // Retrieve volume information from the SD card.
-    FsVolume* vol = SD.vol();
-    if (!vol) {
-      json += "\"sd_status\": \"Not detected\"";
-    } else {
-      uint32_t sectorsPerCluster = vol->sectorsPerCluster();
-      uint32_t clusterCount      = vol->clusterCount();
-      uint32_t freeClusters      = vol->freeClusterCount();
-
-      uint64_t totalSize = (uint64_t)clusterCount * sectorsPerCluster * 512;
-      uint64_t freeSize  = (uint64_t)freeClusters * sectorsPerCluster * 512;
-      uint64_t usedSize  = totalSize - freeSize;
-
-      json += "\"sd_status\": \"OK\",";
-      json += "\"total_size\": " + String(totalSize / (1024.0 * 1024.0), 2) + ",";
-      json += "\"used_size\": "  + String(usedSize / (1024.0 * 1024.0), 2) + ",";
-      json += "\"free_size\": "  + String(freeSize / (1024.0 * 1024.0), 2) + ",";
-    }
-
-    json += "\"esp32_uptime_sec\": " + String(millis() / 1000) + "}";
-    server.send(200, "application/json", json);
-    xSemaphoreGive(sdMutex);
-  } else {
-    Serial.println("SD Mutex timeout in handleSDInfo()");
-    server.send(500, "text/plain", "SD card access timeout");
-  }
-}
-
-void handleDelete() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-
-  if (!server.hasArg("path")) {
-    server.send(400, "text/plain", "Missing 'path' parameter");
-    return;
-  }
-
-  String path = server.arg("path");
-
-  if (!path.startsWith("/")) {
-    server.send(400, "text/plain", "Invalid path: must start with '/'");
-    return;
-  }
-
-  if (path.indexOf("..") != -1) {
-    server.send(403, "text/plain", "Access forbidden");
-    return;
-  }
-
-  if (path.length() > 1 && path.charAt(1) == '.') {
-    server.send(403, "text/plain", "Access forbidden");
-    return;
-  }
-
-  Serial.printf("Deleting path: %s\n", path.c_str());
-
-  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-    bool success = deleteRecursively(path.c_str());
-    xSemaphoreGive(sdMutex);
-    if (success) {
-      server.send(200, "text/plain", "Deleted successfully");
-    } else {
-      server.send(500, "text/plain", "Failed to delete (path may not exist or an error occurred)");
-    }
-  } else {
-    Serial.println("SD Mutex timeout in handleDelete()");
-    server.send(500, "text/plain", "SD card access timeout");
-  }
-}
-
-bool deleteRecursively(const char* path) {
-  FsFile file = SD.open(path);
-  if (!file) {
-    Serial.printf("Path not found: %s\n", path);
-    return false;
-  }
-
-  if (file.isDir()) {
-    while (true) {
-      FsFile entry = file.openNextFile();
-      if (!entry)
-        break;
-
-      char entryName[32];
-      entry.getName(entryName, sizeof(entryName));
-      if (strcmp(entryName, ".") == 0 || strcmp(entryName, "..") == 0) {
-        entry.close();
-        continue;
-      }
-
-      String fullPath = String(path) + "/" + String(entryName);
-      if (entry.isDir()) {
-        if (!deleteRecursively(fullPath.c_str())) {
-          entry.close();
-          file.close();
-          return false;
+            json += "\"sd_status\":\"OK\","
+                    "\"total_size\":" + String(total/1024.0/1024.0,2) + ","
+                    "\"used_size\":"  + String(used /1024.0/1024.0,2) + ","
+                    "\"free_size\":"  + String(free /1024.0/1024.0,2);
         }
-      } else {
-        if (!SD.remove(fullPath.c_str())) {
-          Serial.printf("Failed to delete file: %s\n", fullPath.c_str());
-          entry.close();
-          file.close();
-          return false;
-        }
-      }
-      entry.close();
+
+        // Append ESP32 uptime in seconds
+        json += ",\"esp32_uptime_sec\":" + String(millis()/1000) + "}";
+        server.send(200, "application/json", json);
+        xSemaphoreGive(sdMutex);
+    } else {
+        Serial.println("SD Mutex timeout in handleSDInfo()");
+        server.send(500, "text/plain", "SD card access timeout");
     }
-    file.close();
-    if (!SD.rmdir(path)) {
-      Serial.printf("Failed to remove directory: %s\n", path);
-      return false;
-    }
-    return true;
-  } else {
-    file.close();
-    if (!SD.remove(path)) {
-      Serial.printf("Failed to remove file: %s\n", path);
-      return false;
-    }
-    return true;
-  }
 }
 
+//-------------------------------------------------------------------------------
+// Handler for OPTIONS /delete
+// Enables CORS and allowed methods/headers for DELETE endpoint
+//-------------------------------------------------------------------------------
 void handleDeleteOptions() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
-  server.send(200);
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    server.send(200);
 }
 
+//-------------------------------------------------------------------------------
+// Handler for DELETE /delete?path=/some/path
+// Safely deletes a file or directory tree under given path
+//-------------------------------------------------------------------------------
+void handleDelete() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+
+    if (!server.hasArg("path")) {
+        server.send(400, "text/plain", "Missing 'path' parameter");
+        return;
+    }
+    String path = server.arg("path");
+
+    // Validate path: must start with '/'
+    if (!path.startsWith("/") || path.indexOf("..") != -1 ||
+        (path.length()>1 && path.charAt(1)=='.')) {
+        server.send(403, "text/plain", "Access forbidden");
+        return;
+    }
+
+    Serial.printf("Deleting path: %s\n", path.c_str());
+    if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        bool ok = deleteRecursively(path.c_str());
+        xSemaphoreGive(sdMutex);
+        if (ok) {
+            server.send(200, "text/plain", "Deleted successfully");
+        } else {
+            server.send(500, "text/plain", "Failed to delete");
+        }
+    } else {
+        Serial.println("SD Mutex timeout in handleDelete()");
+        server.send(500, "text/plain", "SD card access timeout");
+    }
+}
+
+//-------------------------------------------------------------------------------
+// Recursively deletes a file or directory at given path
+// Returns true on success, false on any error
+//-------------------------------------------------------------------------------
+bool deleteRecursively(const char* path) {
+    FsFile f = SD.open(path);
+    if (!f) {
+        Serial.printf("Path not found: %s\n", path);
+        return false;
+    }
+
+    if (f.isDir()) {
+        // Delete all entries within directory first
+        while (true) {
+            FsFile e = f.openNextFile();
+            if (!e) break;
+            char name[32];
+            e.getName(name, sizeof(name));
+            // Skip . and .. protections
+            if (strcmp(name, ".") && strcmp(name, "..")) {
+                String sub = String(path) + "/" + name;
+                // Recurse or remove file
+                if (e.isDir()) {
+                    if (!deleteRecursively(sub.c_str())) {
+                        e.close(); f.close();
+                        return false;
+                    }
+                } else {
+                    if (!SD.remove(sub.c_str())) {
+                        Serial.printf("Failed to delete file: %s\n", sub.c_str());
+                        e.close(); f.close();
+                        return false;
+                    }
+                }
+            }
+            e.close();
+        }
+        f.close();
+        // Now remove the empty directory
+        if (!SD.rmdir(path)) {
+            Serial.printf("Failed to remove directory: %s\n", path);
+            return false;
+        }
+    } else {
+        // Single file removal
+        f.close();
+        if (!SD.remove(path)) {
+            Serial.printf("Failed to remove file: %s\n", path);
+            return false;
+        }
+    }
+    return true;
+}
+
+//-------------------------------------------------------------------------------
+// Configures routes, initialises dummy file, and starts the server
+//-------------------------------------------------------------------------------
 void setupServer() {
-  Serial.println("Setting up Web Server...");
+    Serial.println("Setting up Web Server...");
 
-  createDummyFileIfNotExists();
+    // Create test data 
+    createDummyFileIfNotExists();
 
-  server.on("/", HTTP_GET, handleRoot);
-  server.on("/days", HTTP_GET, handleDays);
-  server.on("/drives", HTTP_GET, handleDrives);
-  server.on("/drive", HTTP_GET, handleDrive);
-  server.on("/live", HTTP_GET, handleLiveData);
-  server.on("/sdinfo", HTTP_GET, handleSDInfo);
-  server.on("/delete", HTTP_OPTIONS, handleDeleteOptions);
-  server.on("/delete", HTTP_DELETE, handleDelete);
-  WiFi.setTxPower(WIFI_POWER_19_5dBm);  // Increase signal strength
+    // Bind URL paths to handler functions
+    server.on("/", HTTP_GET, handleRoot);
+    server.on("/days", HTTP_GET, handleDays);
+    server.on("/drives", HTTP_GET, handleDrives);
+    server.on("/drive", HTTP_GET, handleDrive);
+    server.on("/live", HTTP_GET, handleLiveData);
+    server.on("/sdinfo", HTTP_GET, handleSDInfo);
+    server.on("/delete", HTTP_OPTIONS, handleDeleteOptions);
+    server.on("/delete", HTTP_DELETE, handleDelete);
 
-  server.begin();
-  Serial.println("Web server started.");
+    // Boost Wi-Fi transmit power 
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);
+
+    // Launch the server
+    server.begin();
+    Serial.println("Web server started.");
 }
