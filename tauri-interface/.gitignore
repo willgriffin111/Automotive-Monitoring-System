@@ -34,4 +34,4 @@ dist-ssr
 *.sw?
 # ----------
 
-test-results *
+test-results/

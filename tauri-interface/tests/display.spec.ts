@@ -27,7 +27,7 @@ test('UI displays "real-time" mode elements', async ({ page }) => {
   await page.waitForTimeout(500);
   await expect(page.locator('#live-data-container')).toBeVisible();
   await expect(page.locator('#live-data-container')).toContainText('Time:');
-  await expect(page.locator('#live-data-container')).toContainText('Speed:');
+  await expect(page.locator('#live-data-container')).toContainText('Speed');
   await expect(page.locator('#live-data-container')).toContainText('RPM:');
   await expect(page.locator('button', { hasText: 'Hide Points' })).toBeVisible();
 });
@@ -78,4 +78,33 @@ test('Map are visible after drive load', async ({ page }) => {
   });
 
 
+test('Speed metric toggle between MPH and KPH updates live data display', async ({ page }) => {
+  const modeSelect = page.locator('select.dropdown').first();
+  await modeSelect.selectOption('Settings');
+  await page.waitForTimeout(23000);
+  const speedSelect = page.locator('label:has-text("Speed metric:") + select');
+  await expect(speedSelect).toHaveValue('mph');
+  await speedSelect.selectOption('kph');
+  await expect(speedSelect).toHaveValue('kph');
+
+  await modeSelect.selectOption('real-time');
+  await page.waitForTimeout(3000);
+
+  const liveSpeedText = await page.locator('.live-data:has-text("Speed (kph):")').textContent();
+  await expect(liveSpeedText).toContain('kph');
+});
+
+
+test('Graphs render correctly after drive load', async ({ page }) => {
+  const modeSelect = page.locator('select.dropdown').first();
+  await modeSelect.selectOption('post');
+  await page.waitForTimeout(1000);
+
+  await page.click('button:has-text("Load Drive")');
+  await page.waitForSelector('canvas#chart1');
+
+  for (let i = 1; i <= 8; i++) {
+    await expect(page.locator(`canvas#chart${i}`)).toBeVisible();
+  }
+});
 
