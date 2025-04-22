@@ -15,7 +15,6 @@
     shadowUrl: "/marker-shadow.png"
   });
 
-
   let map;                   // Leaflet map instance
   let routeData = [];        // Array of GPS/OBD/IMU data points
   let markers = [];          // Array of Leaflet marker instances
@@ -52,6 +51,7 @@
 
   // Interval handle for live polling
   let liveDataInterval;
+  let lastLivePoint = null;
 
   //------------------------------------------------------------------------------  
   // onMount(): initialise Leaflet map and tile layer
@@ -215,20 +215,27 @@
         .map(line => JSON.parse(line));
 
       if (liveData.length) {
-        // Avoid duplicates by checking timestamp
-        if (
-          !routeData.length ||
-          routeData[routeData.length - 1].gps.time !== liveData[0].gps.time
-        ) {
-          routeData = [...routeData, ...liveData];
-          const last = liveData[liveData.length - 1].gps;
-          map.setView([last.latitude, last.longitude], 16, {
-            animate: true
-          });
+        const newPoints = liveData.filter(pt =>
+          !lastLivePoint || pt.gps.time > lastLivePoint.time
+        );
+        for (const pt of newPoints) {
+          if (lastLivePoint) {
+            L.polyline(
+              [
+                [lastLivePoint.latitude, lastLivePoint.longitude],
+                [pt.gps.latitude, pt.gps.longitude]
+              ],
+              { weight: 5 }
+            ).addTo(map);
+          }
+          routeData.push(pt);
+          lastLivePoint = pt.gps;
         }
+        const last = newPoints[newPoints.length - 1].gps;
+        map.setView([last.latitude, last.longitude], 16, { animate: true });
       }
 
-      await tick();
+      await tick();  // wait for UI to update
 
       // Update live UI fields
       if (routeData.length) {
@@ -246,7 +253,6 @@
         liveAccelY = (latest.imu.accel_y * 0.001 * 9.81).toFixed(2);
       }
 
-      updateRouteLine();
       updateMarkers();
       updateCharts();
     } catch (error) {
@@ -260,7 +266,7 @@
   $: {
     if (processingMode === "real-time") {
       routeData = [];
-      updateRouteLine();
+      lastLivePoint = null;
       updateMarkers();
       if (!liveDataInterval) {
         checkConnection();
@@ -283,8 +289,6 @@
     updateMarkers();
     updateCharts();
   }
-
-
 
   //------------------------------------------------------------------------------  
   // deleteDayFolder()
@@ -377,7 +381,12 @@
     const accelY = routeData.map(e => e.imu.accel_y * 0.001 * 9.81);
 
     // Destroy existing charts if they exist
-    [chart1,chart2,chart3,chart4,chart5,chart6,chart7,chart8].forEach(c => c && c.destroy());
+    [chart1, chart2, chart3, chart4, chart5, chart6, chart7, chart8].forEach((chart, index) => {
+      if (chart) {
+      chart.destroy();
+      eval(`chart${index + 1} = null`);
+      }
+    });
 
     // Create new charts
     chart1 = createChart(chart1Canvas, `Speed (${speedMetric})`, speeds, "orange", "Time", `Speed (${speedMetric})`, timestamps);
@@ -432,11 +441,9 @@
       if (layer instanceof L.Polyline) map.removeLayer(layer);
     });
 
-    // Build coordinate array
     const coords = routeData.map(p => [p.gps.latitude, p.gps.longitude]);
     if (coords.length < 2) return;
 
-    // Extract metric values for coloring
     let vals = routeData.map((_p, i) => {
       if (selectedMetric === "default") return 1;
       if (["accel_x","accel_y"].includes(selectedMetric)) {
@@ -447,7 +454,6 @@
 
     const min = Math.min(...vals), max = Math.max(...vals), range = max - min || 1;
 
-    // Draw each segment with gradient color
     for (let i = 0; i < coords.length - 1; i++) {
       const t = (vals[i] - min) / range;
       const color = `rgb(${255 * t},0,${255 * (1 - t)})`;
@@ -464,7 +470,7 @@
     updateMarkers();
   }
 
- // Inital connection check
+  // Inital connection check
   checkConnection();
 </script>
 
