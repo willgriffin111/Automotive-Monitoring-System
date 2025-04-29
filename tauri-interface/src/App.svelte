@@ -70,17 +70,23 @@
   // - Sets `message` to "Connected" or "Not Connected"
   // - On success, triggers `fetchDays()` to populate UI
   //------------------------------------------------------------------------------
+
   async function checkConnection() {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1000);
+
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 1000);
       const response = await fetch("http://192.168.4.1/", { signal: controller.signal });
-      clearTimeout(timeout);
-      if (!response.ok) throw new Error("Network response error");
-      const text = await response.text();
-      if (text.includes("Connected")) {
-        message = "Connected";
-        fetchDays();
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        const text = await response.text();
+        if (text.includes("Connected")) {
+          message = "Connected";
+          fetchDays();
+        } else {
+          message = "Not Connected";
+        }
       } else {
         message = "Not Connected";
       }
@@ -88,8 +94,10 @@
       console.error("Fetch error:", error);
       message = "Not Connected";
     }
-    await tick();  // wait for UI to update
-  }
+
+    await tick();
+}
+
 
   //------------------------------------------------------------------------------  
   // handleProcessingModeChange()
@@ -131,19 +139,29 @@
   // - Triggers fetchDrives()
   //------------------------------------------------------------------------------
   async function fetchDays() {
-    try {
-      const response = await fetch("http://192.168.4.1/days");
-      if (!response.ok) throw new Error("Failed to fetch days");
-      days = await response.json();
-      selectedDay = days.length ? days[0] : "";
+  try {
+    const response = await fetch("http://192.168.4.1/days");
+    if (response.ok) {
+      const data = await response.json();
+      days = data;
+      if (days.length > 0) {
+        selectedDay = days[0];
+      } else {
+        selectedDay = "";
+      }
       fetchDrives();
-    } catch (error) {
-      console.error("Fetch error:", error);
+    } else {
       days = [];
       selectedDay = "";
     }
-    await tick();
+  } catch (error) {
+    console.error("Fetch error:", error);
+    days = [];
+    selectedDay = "";
   }
+  await tick();
+}
+
 
   //------------------------------------------------------------------------------  
   // fetchDrives()
@@ -151,19 +169,34 @@
   // - Populates `drives` array and sets default selectedDrive
   //------------------------------------------------------------------------------
   async function fetchDrives() {
-    if (!selectedDay) return;
-    try {
-      const response = await fetch(`http://192.168.4.1/drives?day=${selectedDay}`);
-      if (!response.ok) throw new Error("Failed to fetch drives");
-      drives = await response.json();
-      selectedDrive = drives.length ? drives[0] : "";
-    } catch (error) {
-      console.error("Fetch error:", error);
-      drives = [];
+  if (!selectedDay) {
+    return;
+  }
+
+  try {
+    const url = "http://192.168.4.1/drives?day=" + selectedDay;
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      throw new Error("Failed to fetch drives");
+    }
+
+    const list = await response.json();
+    drives = list;
+    if (drives.length > 0) {
+      selectedDrive = drives[0];
+    } else {
       selectedDrive = "";
     }
-    await tick();
+  } catch (error) {
+    console.error("Fetch error:", error);
+    drives = [];
+    selectedDrive = "";
   }
+
+  await tick();
+}
+
 
   //------------------------------------------------------------------------------  
   // loadDrive()
@@ -185,10 +218,8 @@
         .map(line => JSON.parse(line));
       await tick();
       if (routeData.length) {
-        map.setView(
-          [routeData[0].gps.latitude, routeData[0].gps.longitude],
-          14
-        );
+        const gps = routeData[0].gps;
+        map.setView([gps.latitude, gps.longitude], 14);
       }
       updateRouteLine();
       updateMarkers();
@@ -235,7 +266,7 @@
         map.setView([last.latitude, last.longitude], 16, { animate: true });
       }
 
-      await tick();  // wait for UI to update
+      await tick();  
 
       // Update live UI fields
       if (routeData.length) {
@@ -263,17 +294,27 @@
   //------------------------------------------------------------------------------  
   // Reactive: manage live polling based on processingMode
   //------------------------------------------------------------------------------
+  
+  let realTimeInitialized = false; 
   $: {
     if (processingMode === "real-time") {
+      if (!realTimeInitialized) {
+        markers.forEach(m => m.remove());
+        markers = [];
+        map.eachLayer(layer => {
+          if (layer instanceof L.Polyline) map.removeLayer(layer);
+        });
+        realTimeInitialized = true;
+      }
       routeData = [];
       lastLivePoint = null;
-      updateMarkers();
       if (!liveDataInterval) {
         checkConnection();
         fetchLiveData();
         liveDataInterval = setInterval(fetchLiveData, 2000);
       }
     } else {
+      realTimeInitialized = false;
       if (liveDataInterval) {
         clearInterval(liveDataInterval);
         liveDataInterval = null;
@@ -296,24 +337,28 @@
   // - On success, refreshes days & drives lists
   //------------------------------------------------------------------------------
   async function deleteDayFolder() {
-    if (!selectedDay) return;
-    const ok = await confirm(
-      `Delete all drives for ${selectedDay}?`,
-      { title: "Confirm Delete" }
-    );
-    if (!ok) return;
-    try {
-      const response = await fetch(
-        `http://192.168.4.1/delete?path=/${selectedDay}`,
-        { method: "DELETE" }
-      );
-      if (!response.ok) throw new Error("Delete failed");
-      await fetchDays();
-      await fetchDrives();
-    } catch (error) {
-      console.error("Error deleting day folder:", error);
-    }
+  if (selectedDay === "" || selectedDay === null || selectedDay === undefined) {
+    return;
   }
+  var question = "Delete all drives for " + selectedDay + "?";
+  var dialogOptions = { title: "Confirm Delete" };
+  var ok = await confirm(question, dialogOptions);
+  if (ok !== true) {
+    return;
+  }
+  try {
+    var url = "http://192.168.4.1/delete?path=/" + selectedDay;
+    var fetchOptions = { method: "DELETE" };
+    var response = await fetch(url, fetchOptions);
+    if (response.ok === false) {
+      throw new Error("Delete failed");
+    }
+    await fetchDays();
+    await fetchDrives();
+  } catch (error) {
+    console.error("Error deleting day folder:", error);
+  }
+}
 
   //------------------------------------------------------------------------------  
   // deleteDriveFile()
@@ -321,24 +366,30 @@
   // - On success, refreshes drives list
   //------------------------------------------------------------------------------
   async function deleteDriveFile() {
-    if (!selectedDrive) return;
-    const ok = await confirm(
-      `Delete drive ${selectedDrive}?`,
-      { title: "Confirm Delete" }
-    );
-    if (!ok) return;
-    try {
-      const path = `/${selectedDay}/${selectedDrive}`;
-      const response = await fetch(
-        `http://192.168.4.1/delete?path=${encodeURIComponent(path)}`,
-        { method: "DELETE" }
-      );
-      if (!response.ok) throw new Error("Delete failed");
-      await fetchDrives();
-    } catch (error) {
-      console.error("Error deleting drive file:", error);
+    if (selectedDrive === "" || selectedDrive === null || selectedDrive === undefined) {
+        return;
     }
-  }
+    var message = "Delete drive " + selectedDrive + "?";
+    var dialogOptions = { title: "Confirm Delete" };
+    var ok = await confirm(message, dialogOptions);
+    if (ok !== true) {
+        return;
+    }
+    try {
+        var path = "/" + selectedDay + "/" + selectedDrive;
+        var encodedPath = encodeURIComponent(path);
+        var url = "http://192.168.4.1/delete?path=" + encodedPath;
+        var fetchOptions = { method: "DELETE" };
+        var response = await fetch(url, fetchOptions);
+        if (response.ok === false) {
+            throw new Error("Delete failed");
+        }
+        await fetchDrives();
+    } catch (error) {
+        console.error("Error deleting drive file:", error);
+    }
+}
+
 
 
   //------------------------------------------------------------------------------  
@@ -381,12 +432,14 @@
     const accelY = routeData.map(e => e.imu.accel_y * 0.001 * 9.81);
 
     // Destroy existing charts if they exist
-    [chart1, chart2, chart3, chart4, chart5, chart6, chart7, chart8].forEach((chart, index) => {
-      if (chart) {
-      chart.destroy();
-      eval(`chart${index + 1} = null`);
-      }
-    });
+    if (chart1) chart1.destroy();
+     if (chart2) chart2.destroy();
+     if (chart3) chart3.destroy();
+     if (chart4) chart4.destroy();
+     if (chart5) chart5.destroy();
+     if (chart6) chart6.destroy();
+     if (chart7) chart7.destroy();
+     if (chart8) chart8.destroy();
 
     // Create new charts
     chart1 = createChart(chart1Canvas, `Speed (${speedMetric})`, speeds, "orange", "Time", `Speed (${speedMetric})`, timestamps);
@@ -436,30 +489,59 @@
   // - Default = solid line, or color-scale based on metric value
   //------------------------------------------------------------------------------
   function updateRouteLine() {
-    // Remove old lines
-    map.eachLayer(layer => {
-      if (layer instanceof L.Polyline) map.removeLayer(layer);
-    });
-
-    const coords = routeData.map(p => [p.gps.latitude, p.gps.longitude]);
-    if (coords.length < 2) return;
-
-    let vals = routeData.map((_p, i) => {
-      if (selectedMetric === "default") return 1;
-      if (["accel_x","accel_y"].includes(selectedMetric)) {
-        return routeData[i].imu[selectedMetric] * 0.001 * 9.81;
-      }
-      return routeData[i].obd[selectedMetric];
-    });
-
-    const min = Math.min(...vals), max = Math.max(...vals), range = max - min || 1;
-
-    for (let i = 0; i < coords.length - 1; i++) {
-      const t = (vals[i] - min) / range;
-      const color = `rgb(${255 * t},0,${255 * (1 - t)})`;
-      L.polyline([coords[i], coords[i+1]], { color, weight: 5 }).addTo(map);
+  var toRemove = []
+  map.eachLayer(function(layer) {
+    if (layer instanceof L.Polyline) {
+      toRemove.push(layer)
     }
+  })
+  for (var i = 0; i < toRemove.length; i++) {
+    map.removeLayer(toRemove[i])
   }
+
+  var coords = []
+  for (var i = 0; i < routeData.length; i++) {
+    coords.push([
+      routeData[i].gps.latitude,
+      routeData[i].gps.longitude
+    ])
+  }
+  if (coords.length < 2) return
+
+  var vals = []
+  for (var i = 0; i < routeData.length; i++) {
+    var v
+    if (selectedMetric === "default") {
+      v = 1
+    } else if (selectedMetric === "accel_x" || selectedMetric === "accel_y") {
+      v = routeData[i].imu[selectedMetric] * 0.001 * 9.81
+    } else {
+      v = routeData[i].obd[selectedMetric]
+    }
+    vals.push(v)
+  }
+
+  var min = vals[0]
+  var max = vals[0]
+  for (var i = 1; i < vals.length; i++) {
+    if (vals[i] < min) min = vals[i]
+    if (vals[i] > max) max = vals[i]
+  }
+  var range = max - min
+  if (range === 0) range = 1
+
+  for (var i = 0; i < coords.length - 1; i++) {
+    var t = (vals[i] - min) / range
+    var r = 255 * t
+    var b = 255 * (1 - t)
+    var color = "rgb(" + r + ",0," + b + ")"
+    L.polyline(
+      [coords[i], coords[i + 1]],
+      { color: color, weight: 5 }
+    ).addTo(map)
+  }
+}
+
 
   //------------------------------------------------------------------------------  
   // togglePoints()
