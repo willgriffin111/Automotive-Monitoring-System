@@ -137,7 +137,7 @@ void test_obd_readThrottle(void) {
 }
 
 void test_obd_calculateInstantMPG(void) {
-  float mpg = obd.calculateInstantMPG(100, 10);  // Example: 100 kph, 10 g/s
+  float mpg = obd.calculateInstantMPG(100, 10);  
   if (100 > 0 && 10 > 0) {
     TEST_ASSERT_TRUE(mpg > 0);
   } else {
@@ -145,8 +145,20 @@ void test_obd_calculateInstantMPG(void) {
   }
 }
 
+void test_calculateInstantMPG_zeroMAF(void) {
+  float mpg = obd.calculateInstantMPG(50, 0);
+  TEST_ASSERT_EQUAL_FLOAT(0.0, mpg);
+}
+
+
+void test_calculateInstantMPG_zeroSpeed(void) {
+  float mpg = obd.calculateInstantMPG(0, 5);
+  TEST_ASSERT_EQUAL_FLOAT(0.0, mpg);
+}
+
+
 void test_obd_calculateAverageMPG(void) {
-  float avgMPG = obd.calculateAverageMPG(1000, 10); // Example: 1000, 10
+  float avgMPG = obd.calculateAverageMPG(1000, 10); 
   if (10 > 0) {
     TEST_ASSERT_TRUE(avgMPG > 0);
   } else {
@@ -154,6 +166,32 @@ void test_obd_calculateAverageMPG(void) {
   }
 }
 
+
+void test_calculateAverageMPG_zeroDistance(void) {
+  float avg = obd.calculateAverageMPG(0, 10);
+  TEST_ASSERT_EQUAL_FLOAT(0.0, avg);
+}
+
+
+void test_calculateAverageMPG_zeroMAF(void) {
+  float avg = obd.calculateAverageMPG(100, 0);
+  TEST_ASSERT_EQUAL_FLOAT(0.0, avg);
+}
+
+void test_obd_timeout(void) {
+  int dummy = 0;
+  unsigned long start = millis();
+  bool ok = obd.readSpeed(dummy);  
+  unsigned long elapsed = millis() - start;
+
+  TEST_ASSERT_TRUE_MESSAGE(elapsed < OBD_TIMEOUT_LONG,
+    "OBD readSpeed hung longer than 500ms"
+  );
+  TEST_ASSERT_FALSE_MESSAGE(
+    ok,
+    "OBD readSpeed should return false on timeout"
+  );
+}
 // ------------------ SD Card Tests ------------------
 
 void test_sd_init(void) {
@@ -211,6 +249,84 @@ void test_sd_directory_delete(void) {
   TEST_ASSERT_FALSE(SD.exists(folderName));
 }
 
+void test_sd_remove_nonexistent_file(void) {
+  TEST_ASSERT_FALSE(SD.remove("no_such_file.txt"));
+}
+
+void test_sd_rmdir_nonexistent_folder(void) {
+  TEST_ASSERT_FALSE(SD.rmdir("no_such_folder"));
+}
+void test_sd_power_loss_during_write(void) {
+  const char* fileName = "power_test.json";
+  // 1) Open file for append
+  FsFile file = SD.open(fileName, O_RDWR | O_CREAT | O_AT_END);
+  TEST_ASSERT_TRUE_MESSAGE(file.isOpen(), "Opening for power-loss test failed");
+
+  // 2) Write a partial JSON payload
+  file.print("{\"partial\":");
+  // 3) Simulate sudden power loss by re-initialising SD mid-write
+  SD.begin(SD_CS_PIN, SD_SCK_MHZ(10));
+  // 4) Close the stale file handle
+  file.close();
+
+  // 5) Remount and verify FS is intact
+  TEST_ASSERT_TRUE_MESSAGE(
+    SD.begin(SD_CS_PIN, SD_SCK_MHZ(10)),
+    "SD re-init after simulated power-loss failed"
+  );
+  // 6) Check that the file still exists
+  TEST_ASSERT_TRUE_MESSAGE(
+    SD.exists(fileName),
+    "File disappeared after simulated power-loss"
+  );
+
+  // Cleanup
+  SD.remove(fileName);
+}
+
+// ------------------ SD Concurrent-Access Test ------------------
+
+void test_sd_concurrent_access(void) {
+  const char* fileName = "concur.json";
+  // Ensure file is not there to start
+  if (SD.exists(fileName)) {
+    SD.remove(fileName);
+  }
+
+  // 1) Open writer
+  FsFile writer = SD.open(fileName, O_RDWR | O_CREAT | O_AT_END);
+  TEST_ASSERT_TRUE_MESSAGE(writer.isOpen(), "Writer open failed");
+
+  // 2) While writing, intermittently check that the file remains accessible
+  for (int i = 0; i < 5; ++i) {
+    writer.print("{\"i\":"); writer.print(i); writer.print("}\n");
+    writer.sync();
+
+    // Concurrent read: just open for read and peek a byte
+    FsFile reader = SD.open(fileName, O_READ);
+    TEST_ASSERT_TRUE_MESSAGE(reader.isOpen(), "Reader open during write failed");
+
+    uint32_t sz = reader.size();
+    TEST_ASSERT_TRUE_MESSAGE(sz > 0, "File size should be >0 during concurrent access");
+
+    char c;
+    reader.read(&c, 1);
+    reader.close();
+  }
+
+  // 3) Finish and verify final file
+  writer.close();
+  FsFile finalReader = SD.open(fileName, O_READ);
+  TEST_ASSERT_TRUE_MESSAGE(finalReader.isOpen(), "Final read open failed");
+  TEST_ASSERT_TRUE_MESSAGE(finalReader.size() > 0, "Final file empty after write");
+  finalReader.close();
+
+  // Cleanup
+  SD.remove(fileName);
+}
+
+
+
 // ------------------ Main: Run All Tests ------------------
 void setup() {
   UNITY_BEGIN();
@@ -225,6 +341,7 @@ void setup() {
   RUN_TEST(test_gnss_data);
   RUN_TEST(test_imu_data);
   RUN_TEST(test_gnss_dead_reckoning_data);
+
   
   // OBD tests
   RUN_TEST(test_obd_initialise);
@@ -234,6 +351,10 @@ void setup() {
   RUN_TEST(test_obd_readThrottle);
   RUN_TEST(test_obd_calculateInstantMPG);
   RUN_TEST(test_obd_calculateAverageMPG);
+  RUN_TEST(test_calculateInstantMPG_zeroMAF);
+  RUN_TEST(test_calculateInstantMPG_zeroSpeed);
+  RUN_TEST(test_calculateAverageMPG_zeroDistance);
+  RUN_TEST(test_obd_timeout);
   
   // SD card tests
   RUN_TEST(test_sd_init);
@@ -243,6 +364,10 @@ void setup() {
   RUN_TEST(test_sd_json_file_read);
   RUN_TEST(test_sd_json_file_delete);
   RUN_TEST(test_sd_directory_delete);
+  RUN_TEST(test_sd_remove_nonexistent_file);
+  RUN_TEST(test_sd_rmdir_nonexistent_folder);
+  RUN_TEST(test_sd_power_loss_during_write);
+  RUN_TEST(test_sd_concurrent_access);
   
   UNITY_END();
 }
