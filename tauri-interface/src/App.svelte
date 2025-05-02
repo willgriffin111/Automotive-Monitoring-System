@@ -245,26 +245,21 @@
         .filter(line => line.trim())
         .map(line => JSON.parse(line));
 
-      if (liveData.length) {
-        const newPoints = liveData.filter(pt =>
-          !lastLivePoint || pt.gps.time > lastLivePoint.time
-        );
-        for (const pt of newPoints) {
-          if (lastLivePoint) {
-            L.polyline(
-              [
-                [lastLivePoint.latitude, lastLivePoint.longitude],
-                [pt.gps.latitude, pt.gps.longitude]
-              ],
-              { weight: 5 }
-            ).addTo(map);
-          }
-          routeData.push(pt);
-          lastLivePoint = pt.gps;
-        }
-        const last = newPoints[newPoints.length - 1].gps;
-        map.setView([last.latitude, last.longitude], 16, { animate: true });
+        if (liveData.length) {
+      const newPoints = liveData.filter(pt =>
+        !lastLivePoint || pt.gps.time > lastLivePoint.time
+      );
+
+      if (newPoints.length) {
+        routeData = [...routeData, ...newPoints];
+        lastLivePoint = newPoints[newPoints.length - 1].gps;
+          map.setView(
+            [lastLivePoint.latitude, lastLivePoint.longitude],
+            16,
+            { animate: true }
+          );
       }
+    }
 
       await tick();  
 
@@ -284,12 +279,15 @@
         liveAccelY = (latest.imu.accel_y * 0.001 * 9.81).toFixed(2);
       }
 
-      updateMarkers();
-      updateCharts();
+    updateMarkers();
+    updateRouteLine();
+    updateCharts();
     } catch (error) {
       console.error("Error fetching live data:", error);
     }
   }
+
+  
 
   //------------------------------------------------------------------------------  
   // Reactive: manage live polling based on processingMode
@@ -327,8 +325,8 @@
   //------------------------------------------------------------------------------
   $: if (routeData.length) {
     updateRouteLine();
-    updateMarkers();
-    updateCharts();
+    // updateMarkers();
+    // updateCharts();
   }
 
   //------------------------------------------------------------------------------  
