@@ -487,6 +487,8 @@
   // - Default = solid line, or color-scale based on metric value
   //------------------------------------------------------------------------------
   function updateRouteLine() {
+
+    // REMOVE OLD POLYLINES
   var toRemove = []
   map.eachLayer(function(layer) {
     if (layer instanceof L.Polyline) {
@@ -496,7 +498,8 @@
   for (var i = 0; i < toRemove.length; i++) {
     map.removeLayer(toRemove[i])
   }
-
+  
+  // EXTRACT GPS POSITIONS FROM routeData
   var coords = []
   for (var i = 0; i < routeData.length; i++) {
     coords.push([
@@ -504,8 +507,10 @@
       routeData[i].gps.longitude
     ])
   }
+  // IF NO GPS DATA, DO NOTHING
   if (coords.length < 2) return
 
+  // IF DEFAULT, DRAW SOLID LINE
   var vals = []
   for (var i = 0; i < routeData.length; i++) {
     var v
@@ -519,6 +524,7 @@
     vals.push(v)
   }
 
+// Find min/max of vals
   var min = vals[0]
   var max = vals[0]
   for (var i = 1; i < vals.length; i++) {
@@ -528,6 +534,7 @@
   var range = max - min
   if (range === 0) range = 1
 
+// DRAW POLYLINE WITH COLOR BASED ON METRIC
   for (var i = 0; i < coords.length - 1; i++) {
     var t = (vals[i] - min) / range
     var r = 255 * t

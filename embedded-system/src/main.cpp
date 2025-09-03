@@ -190,7 +190,7 @@ void dataTask(void *pvParameters) {
         }
 
         lastTime = currentTime;
-        vTaskDelay(pdMS_TO_TICKS(1000));  // 1-second delay (non-blocking)
+        vTaskDelay(pdMS_TO_TICKS(1000));  // 1-second delay 
     }
 }
 
