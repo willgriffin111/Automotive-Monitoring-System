@@ -1,7 +1,7 @@
 # Vehicle Data Logger and Analysis
 
 <p align="center">
-  <img src="docs/inside.jpeg" width="51%"/>
+  <img src="docs/Inside.jpeg" width="51%"/>
   <img src="docs/Outside.jpeg"  width="45%"/>
 </p>
 
@@ -31,6 +31,3 @@ In settings mode, the user can view SD card status, check device uptime, and del
 
 ## Data flow Diagram
 ![](docs/SequenceDiagram.png)
-## Hardware Circuit Design
-
-![](docs/Circuit.png)
